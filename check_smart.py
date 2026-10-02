@@ -236,7 +236,11 @@ class SmartCheck:
                 command,
                 shell=True,
                 capture_output=True,
-                text=True
+                text=True,
+                # A hanging drive must not block until Icinga kills the
+                # plugin; TimeoutExpired (and PermissionError when killing
+                # the root-owned sudo child) end up in the handler below
+                timeout=60
             )
             output = result.stdout.splitlines()
             self.debug(f"output:\n{result.stdout}\n")

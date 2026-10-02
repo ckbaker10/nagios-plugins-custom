@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nagios-plugins-lukas"
-version = "1.0.0"
+version = "1.1.0"
 description = "Custom Nagios plugins for monitoring various devices"
 authors = [
     {name = "SVA System Vertrieb Alexander GmbH", email = "michael.hoess@sva.de"}
@@ -28,28 +28,13 @@ classifiers = [
 ]
 
 dependencies = [
-    # Core HTTP and networking
+    # Only modules the plugins import; versions locked in requirements.txt
     "requests>=2.25.0",
     "urllib3>=1.26.0",
-    
-    # System monitoring
+    "pyyaml>=5.4.0",
     "psutil>=5.8.0",
-    
-    # Cryptography for TP-Link P110 encryption
     "pycryptodome>=3.15.0",
     "pkcs7>=0.1.2",
-    
-    # SNMP monitoring for printer/network devices
-    "pysnmp>=4.4.12",
-    
-    # Data validation and parsing
-    "pydantic>=1.10.0",
-    "pyyaml>=5.4.0",
-    
-    # CMK/CheckMK related (optional, for CMK integration)
-    # These would be available in CheckMK environment
-    # "cmk-agent-based>=2.0.0",
-    # "cmk-rulesets>=1.0.0",
 ]
 
 [project.optional-dependencies]
@@ -68,9 +53,9 @@ checkmk = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/ckbaker10/nagios-plugins"
-Repository = "https://github.com/ckbaker10/nagios-plugins"
-Issues = "https://github.com/ckbaker10/nagios-plugins/issues"
+Homepage = "https://github.com/ckbaker10/nagios-plugins-custom"
+Repository = "https://github.com/ckbaker10/nagios-plugins-custom"
+Issues = "https://github.com/ckbaker10/nagios-plugins-custom/issues"
 
 [project.scripts]
 check_gmodem2 = "nagios_plugins.check_gmodem2:main"

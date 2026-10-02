@@ -44,53 +44,59 @@ To enable third-party vendor compatibility:
 
 ## Quick Start
 
-### Prerequisites
+### Installation (recommended): prebuilt bundle via Ansible
 
-- Python 3.8 or higher
-- UV package manager
-- Nagios or Icinga monitoring system
-- Root or sudo access for installation
+One self-contained x86_64 bundle (standalone Python 3.12, locked dependencies
+from `requirements.txt`, goss) is built once and installed on all hosts. No
+uv, venv or compiler is needed on the hosts; it runs on every x86_64 Linux
+with glibc 2.28 or newer (EL8+, Debian 10+, Ubuntu 20.04+, SLES 15+).
 
-### Installation
-
-1. Install UV package manager:
-
-```
-curl -LsSf https://astral.sh/uv/install.sh | sh
+```bash
+cd ansible
+ansible-galaxy collection install -r requirements.yml
+ansible-playbook -i HOSTS playbook.yml
 ```
 
-2. Clone and install:
+The role (`ansible/roles/deploy-nagios-plugins-custom`):
+
+- installs smartmontools, lm-sensors, net-snmp tools and setcap
+- downloads `nagios-plugins-custom-<version>-x86_64.tar.gz` from the GitHub
+  release, checks its SHA-256 and unpacks it to `/opt/nagios-plugins-custom-<version>`
+- points `/opt/nagios-plugins-lukas` (the path used by the CheckCommands) to
+  it; an old git checkout there is moved to `/opt/nagios-plugins-lukas.pre-<version>`
+- creates `python3-lpr` (system python with `cap_net_bind_service`) for
+  `check_lpr`
+- writes `/etc/sudoers.d/nagios-plugins` (smartctl, hddtemp, check_lpr;
+  `sensors` needs no root)
+- skips hosts that are not x86_64
+
+Verify:
 
 ```
-git clone https://github.com/ckbaker10/nagios-plugins-custom.git /opt/nagios-plugins-lukas
-cd /opt/nagios-plugins-lukas
-sudo ./install.sh
+sudo -u nagios /opt/nagios-plugins-lukas/check_lm_sensors --version
+cat /opt/nagios-plugins-lukas/BUILDINFO
 ```
 
-3. Verify installation:
+### Build and release
 
-```
-sudo -u nagios /opt/nagios-plugins-lukas/check_gmodem2 --help
-sudo -u nagios /opt/nagios-plugins-lukas/check_p110 --help
-sudo -u nagios /opt/nagios-plugins-lukas/check_jetdirect --help
-sudo -u nagios /opt/nagios-plugins-lukas/check_goss --help
-sudo -u nagios /opt/nagios-plugins-lukas/check_compose --help
-sudo -u nagios /opt/nagios-plugins-lukas/check_eap772 --help
-sudo -u nagios /opt/nagios-plugins-lukas/check_kindle --help
-sudo -u nagios /opt/nagios-plugins-lukas/check_smart --help
-sudo -u nagios /opt/nagios-plugins-lukas/check_lm_sensors --help
+```bash
+build/build.sh      # dist/nagios-plugins-custom-<version>-x86_64.tar.gz, ~30 s
+build/release.sh    # GitHub release v<version>, needs gh auth login
 ```
 
-All commands should display help text without errors.
+The version comes from `pyproject.toml`. Dependencies: edit
+`requirements.in`, then lock with the command at its top.
+
+### Legacy installation
+
+`install.sh` (git checkout plus per-host uv venv) still works but is replaced
+by the bundle; it pulls unpinned dependencies on every host.
 
 ## Architecture
 
-This collection uses a wrapper-based architecture:
-
-- Python Scripts - Core plugin logic with proper dependency isolation
-- Wrapper Scripts - Bash wrappers that activate virtual environment
-- Virtual Environment - Isolated Python dependencies managed by UV
-- Installation Script - Automated setup with proper permissions
+- Python scripts: plugin logic
+- Wrapper scripts: run the script with the bundled Python and `lib/`
+- Bundle: standalone Python, locked dependencies, goss, built on Rocky Linux 8
 
 ## Configuration Examples
 

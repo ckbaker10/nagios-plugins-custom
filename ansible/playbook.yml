@@ -1,0 +1,6 @@
+---
+- name: Deploy custom Nagios plugins
+  hosts: all
+  become: true
+  roles:
+    - deploy-nagios-plugins-custom

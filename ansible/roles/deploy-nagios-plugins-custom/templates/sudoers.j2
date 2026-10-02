@@ -1,0 +1,8 @@
+# Managed by Ansible (deploy-nagios-plugins-custom)
+# Root-only operations of the custom Nagios plugins; sensors needs no root
+Defaults:{{ nagios_plugins_custom_user }} !requiretty
+{{ nagios_plugins_custom_user }} ALL=(root) NOPASSWD: {{ nagios_plugins_custom_smartctl }}
+{% if nagios_plugins_custom_hddtemp | length > 0 %}
+{{ nagios_plugins_custom_user }} ALL=(root) NOPASSWD: {{ nagios_plugins_custom_hddtemp }}
+{% endif %}
+{{ nagios_plugins_custom_user }} ALL=(root) NOPASSWD: {{ nagios_plugins_custom_link }}/check_lpr

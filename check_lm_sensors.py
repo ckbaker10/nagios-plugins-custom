@@ -20,7 +20,7 @@ import sys
 from typing import Dict, Optional, Tuple
 
 
-__version__ = '3.1.0'
+__version__ = '3.2.0'
 
 
 class SensorMonitor:
@@ -40,6 +40,7 @@ class SensorMonitor:
         self.drives = True
         self.sensors = True
         self.list_mode = False
+        self.timeout = 15
         
         # Status tracking
         self.criticals: list[str] = []
@@ -90,7 +91,7 @@ class SensorMonitor:
                             ['sudo', self.hddtemp_bin, '-n', f'/dev/{name}'],
                             capture_output=True,
                             text=True,
-                            timeout=5
+                            timeout=self.timeout
                         )
                         
                         output = result.stdout.strip()
@@ -111,7 +112,9 @@ class SensorMonitor:
                         else:
                             self.verbose(f"warning: temperature for /dev/{name} not available\n")
                     
-                    except (subprocess.TimeoutExpired, subprocess.SubprocessError, FileNotFoundError):
+                    # PermissionError: on timeout subprocess tries to kill the
+                    # root-owned sudo process, which the nagios user may not
+                    except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError):
                         self.verbose(f"warning: temperature for /dev/{name} not available\n")
         
         except (IOError, OSError) as e:
@@ -124,36 +127,28 @@ class SensorMonitor:
             self.verbose("warning: sensors not found: lm_sensors not checked\n")
             return
         
-        # Check if sensors are configured
+        # sensors reads /sys/class/hwmon, which is world-readable: no sudo, so
+        # a hanging call (e.g. waking up a GPU for its temperature) can be
+        # killed on timeout. One JSON call is enough.
         try:
             result = subprocess.run(
-                ['sudo', self.sensors_bin],
+                [self.sensors_bin, '-Aj'],
                 capture_output=True,
                 text=True,
-                timeout=5
+                timeout=self.timeout
             )
-            
-            if 'No sensors found' in result.stdout or "Can't" in result.stdout:
-                self.verbose("warning: no sensors found\n")
-                return
-        
-        except (subprocess.TimeoutExpired, subprocess.SubprocessError):
-            self.verbose("warning: could not check for sensors\n")
+        except subprocess.TimeoutExpired:
+            print(f"UNKNOWN: {self.sensors_bin} -Aj did not finish within {self.timeout}s")
+            sys.exit(3)
+        except OSError as e:
+            print(f"UNKNOWN: cannot run {self.sensors_bin}: {e}")
+            sys.exit(3)
+
+        if result.returncode != 0 or not result.stdout.strip():
+            self.verbose(f"warning: no sensor data: {result.stderr.strip()}\n")
             return
-        
-        # Get JSON output
+
         try:
-            result = subprocess.run(
-                ['sudo', self.sensors_bin, '-Aj'],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            
-            if result.returncode != 0:
-                self.verbose("warning: could not get sensor data\n")
-                return
-            
             data = json.loads(result.stdout)
             
             for chip_name, chip_data in data.items():
@@ -176,7 +171,7 @@ class SensorMonitor:
                             
                             break  # Only use the first *_input or *_average field
         
-        except (subprocess.TimeoutExpired, subprocess.SubprocessError, json.JSONDecodeError) as e:
+        except (json.JSONDecodeError, AttributeError, ValueError) as e:
             self.verbose(f"warning: could not parse sensor data: {e}\n")
     
     def get_sensor_value(self, name: str) -> Optional[float]:
@@ -362,6 +357,8 @@ Sensors with spaces in names can be specified:
                         help='Path to hddtemp binary')
     parser.add_argument('--sensors_bin', type=str,
                         help='Path to sensors binary')
+    parser.add_argument('-t', '--timeout', type=int, default=15,
+                        help='Timeout in seconds for sensors/hddtemp calls (default: 15)')
     
     args = parser.parse_args()
     
@@ -369,6 +366,7 @@ Sensors with spaces in names can be specified:
     monitor.verbosity = args.verbose
     monitor.sanitize = args.sanitize
     monitor.list_mode = args.list
+    monitor.timeout = args.timeout
     
     # Convert list of tuples to dicts
     monitor.checks = dict(args.check)

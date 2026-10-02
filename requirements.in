@@ -1,0 +1,10 @@
+# Runtime dependencies of the plugins (imported modules only); locked in
+# requirements.txt via:
+#   uv pip compile requirements.in --generate-hashes --python-version 3.12 \
+#       --python-platform x86_64-manylinux_2_28 -o requirements.txt
+requests     # check_gmodem2, check_kindle, check_p110
+urllib3      # check_kindle, check_p110
+pyyaml       # check_compose
+psutil       # check_space_usage
+pycryptodome # check_p110
+pkcs7        # check_p110

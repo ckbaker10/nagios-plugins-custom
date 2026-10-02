@@ -1,0 +1,27 @@
+---
+# Version of the prebuilt bundle (build/build.sh, version from pyproject.toml)
+nagios_plugins_custom_version: "1.1.0"
+nagios_plugins_custom_install_prefix: "/opt/nagios-plugins-custom-{{ nagios_plugins_custom_version }}"
+
+# Stable path used by the Icinga2 CheckCommands (commands-custom.conf); was a
+# git checkout before 1.1.0
+nagios_plugins_custom_link: "/opt/nagios-plugins-lukas"
+
+nagios_plugins_custom_release_tag: "v{{ nagios_plugins_custom_version }}"
+nagios_plugins_custom_release_url: "https://github.com/ckbaker10/nagios-plugins-custom/releases/download/{{ nagios_plugins_custom_release_tag }}"
+nagios_plugins_custom_tarball: "nagios-plugins-custom-{{ nagios_plugins_custom_version }}-x86_64.tar.gz"
+nagios_plugins_custom_tmp_dir: "/var/tmp"
+
+# User the Icinga2 agent runs checks as
+nagios_plugins_custom_user: "{{ 'nagios' if ansible_facts['os_family'] == 'Debian' else 'icinga' }}"
+
+# Helper programs used by the plugins: smartctl (check_smart), sensors
+# (check_lm_sensors), snmpget/snmpwalk (check_eap772, check_jetdirect),
+# setcap (check_lpr)
+nagios_plugins_custom_packages:
+  Debian: [smartmontools, lm-sensors, snmp, libcap2-bin, tar, gzip]
+  RedHat: [smartmontools, lm_sensors, net-snmp-utils, libcap, tar, gzip]
+  Suse: [smartmontools, sensors, net-snmp, libcap-progs, tar, gzip]
+
+# Directory for check_goss (goss.yaml is host specific and not managed here)
+nagios_plugins_custom_goss_dir: "/opt/goss"

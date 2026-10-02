@@ -1,0 +1,152 @@
+---
+# Installs the prebuilt custom plugin bundle (build/build.sh) from the GitHub
+# release. One x86_64 build for all distributions; nothing is built on the
+# hosts and no venv/uv is needed.
+
+- name: Skip hosts that are not x86_64
+  when: ansible_facts['architecture'] != 'x86_64'
+  block:
+    - name: Report unsupported architecture
+      ansible.builtin.debug:
+        msg: "nagios-plugins-custom is only built for x86_64, skipping {{ ansible_facts['architecture'] }}"
+    - name: End play for this host
+      ansible.builtin.meta: end_host
+
+- name: Install helper programs
+  ansible.builtin.package:
+    name: "{{ nagios_plugins_custom_packages[ansible_facts['os_family']] }}"
+    state: present
+  when: ansible_facts['os_family'] != 'Suse'
+
+# ansible-core has no zypper backend for the generic package module
+- name: Install helper programs (SUSE)
+  community.general.zypper:
+    name: "{{ nagios_plugins_custom_packages['Suse'] }}"
+    state: present
+  when: ansible_facts['os_family'] == 'Suse'
+
+- name: Download bundle from GitHub release
+  ansible.builtin.get_url:
+    url: "{{ nagios_plugins_custom_release_url }}/{{ nagios_plugins_custom_tarball }}"
+    dest: "{{ nagios_plugins_custom_tmp_dir }}/{{ nagios_plugins_custom_tarball }}"
+    checksum: "sha256:{{ nagios_plugins_custom_release_url }}/{{ nagios_plugins_custom_tarball }}.sha256"
+    mode: '0644'
+  register: nagios_plugins_custom_download
+
+- name: Check installed bundle
+  ansible.builtin.stat:
+    path: "{{ nagios_plugins_custom_install_prefix }}/BUILDINFO"
+  register: nagios_plugins_custom_buildinfo
+
+- name: Remove previous installation of this version
+  ansible.builtin.file:
+    path: "{{ nagios_plugins_custom_install_prefix }}"
+    state: absent
+  when: nagios_plugins_custom_download is changed
+
+- name: Unpack bundle
+  ansible.builtin.unarchive:
+    src: "{{ nagios_plugins_custom_tmp_dir }}/{{ nagios_plugins_custom_tarball }}"
+    dest: /
+    remote_src: true
+  when: nagios_plugins_custom_download is changed or not nagios_plugins_custom_buildinfo.stat.exists
+
+# check_lpr binds a privileged source port (RFC 1179). The bundled python
+# loads libpython via $ORIGIN, which the loader ignores for binaries with
+# capabilities, so a copy of the system python gets cap_net_bind_service.
+- name: Find system python for check_lpr
+  ansible.builtin.command:
+    cmd: python3 -c 'import os, sys; print(os.path.realpath(sys.executable))'
+  register: nagios_plugins_custom_system_python
+  changed_when: false
+  failed_when: false
+
+- name: Copy system python for check_lpr
+  ansible.builtin.copy:
+    src: "{{ nagios_plugins_custom_system_python.stdout }}"
+    dest: "{{ nagios_plugins_custom_install_prefix }}/python3-lpr"
+    remote_src: true
+    mode: '0755'
+  register: nagios_plugins_custom_lpr_python
+  when: nagios_plugins_custom_system_python.rc == 0
+
+- name: Check capabilities of python3-lpr
+  ansible.builtin.command:
+    cmd: "getcap {{ nagios_plugins_custom_install_prefix }}/python3-lpr"
+  register: nagios_plugins_custom_getcap
+  changed_when: false
+  when: nagios_plugins_custom_system_python.rc == 0
+
+- name: Allow python3-lpr to bind privileged ports
+  ansible.builtin.command:
+    cmd: "setcap cap_net_bind_service=+ep {{ nagios_plugins_custom_install_prefix }}/python3-lpr"
+  changed_when: true
+  when:
+    - nagios_plugins_custom_system_python.rc == 0
+    - "'cap_net_bind_service' not in nagios_plugins_custom_getcap.stdout"
+
+# Before 1.1.0 the stable path was a git checkout with a per-host venv; keep
+# it as a backup instead of deleting it
+- name: Check stable path
+  ansible.builtin.stat:
+    path: "{{ nagios_plugins_custom_link }}"
+  register: nagios_plugins_custom_link_stat
+
+- name: Move old git checkout aside
+  ansible.builtin.command:
+    cmd: "mv {{ nagios_plugins_custom_link }} {{ nagios_plugins_custom_link }}.pre-{{ nagios_plugins_custom_version }}"
+    creates: "{{ nagios_plugins_custom_link }}.pre-{{ nagios_plugins_custom_version }}"
+  when:
+    - nagios_plugins_custom_link_stat.stat.exists
+    - nagios_plugins_custom_link_stat.stat.isdir
+    - not nagios_plugins_custom_link_stat.stat.islnk
+
+- name: Point {{ nagios_plugins_custom_link }} to {{ nagios_plugins_custom_version }}
+  ansible.builtin.file:
+    src: "{{ nagios_plugins_custom_install_prefix }}"
+    dest: "{{ nagios_plugins_custom_link }}"
+    state: link
+    force: true
+
+- name: Create goss directory
+  ansible.builtin.file:
+    path: "{{ nagios_plugins_custom_goss_dir }}"
+    state: directory
+    owner: "{{ nagios_plugins_custom_user }}"
+    group: "{{ nagios_plugins_custom_user }}"
+    mode: '0755'
+
+- name: Locate smartctl and hddtemp
+  ansible.builtin.shell:
+    cmd: "command -v {{ item }} || true"
+  loop: [smartctl, hddtemp]
+  register: nagios_plugins_custom_bins
+  changed_when: false
+
+- name: Set binary paths for sudoers
+  ansible.builtin.set_fact:
+    nagios_plugins_custom_smartctl: "{{ nagios_plugins_custom_bins.results[0].stdout | default('', true) or '/usr/sbin/smartctl' }}"
+    nagios_plugins_custom_hddtemp: "{{ nagios_plugins_custom_bins.results[1].stdout | default('', true) }}"
+
+- name: Install sudoers rules
+  ansible.builtin.template:
+    src: sudoers.j2
+    dest: /etc/sudoers.d/nagios-plugins
+    owner: root
+    group: root
+    mode: '0440'
+    validate: visudo -cf %s
+
+- name: Verify installation
+  ansible.builtin.command:
+    cmd: "{{ nagios_plugins_custom_link }}/check_lm_sensors --version"
+  become: true
+  become_user: "{{ nagios_plugins_custom_user }}"
+  register: nagios_plugins_custom_verify
+  changed_when: false
+
+- name: Display installation summary
+  ansible.builtin.debug:
+    msg:
+      - "{{ nagios_plugins_custom_verify.stdout }}"
+      - "Plugin directory: {{ nagios_plugins_custom_link }} -> {{ nagios_plugins_custom_install_prefix }}"
