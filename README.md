@@ -198,25 +198,11 @@ object CheckCommand "check_compose" {
 }
 ```
 
-### Importing Standard Nagios Plugins
+### Standard Nagios Plugins
 
-This repository includes auto-generated Icinga2 CheckCommand definitions for the standard nagios-plugins 2.4.12 collection. These definitions were created by parsing the source code to extract command-line options.
-
-**Available commands:** 51 plugins including check_mysql, check_http, check_smtp, check_ldap, check_disk, and many more.
-
-See [NAGIOS-PLUGINS-IMPORT.md](icinga-custom-commands/NAGIOS-PLUGINS-IMPORT.md) for:
-- Complete list of 51 parsed plugins
-- Installation and usage instructions
-- Parsing methodology details
-- Variable naming conventions
-
-**Quick import:**
-```bash
-sudo cp /opt/nagios-plugins-lukas/icinga-custom-commands/commands-nagios-plugins-2.4.12.conf \
-    /etc/icinga2/conf.d/
-sudo icinga2 daemon -C
-sudo systemctl reload icinga2
-```
+This repository contains only the custom plugins. The standard nagios-plugins
+(uniform build for all Linux hosts, parser and generated Icinga2 CheckCommands)
+live in [nagios-plugins-general](https://github.com/ckbaker10/nagios-plugins-general).
 
 ## Usage Examples
 
