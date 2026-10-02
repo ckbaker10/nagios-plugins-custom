@@ -3,5 +3,6 @@ debug_files/*
 *.egg-info
 uv.lock
 .venv
-__pycache__dist/
+__pycache__
+dist/
 work/
