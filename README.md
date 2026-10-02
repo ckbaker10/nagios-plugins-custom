@@ -62,7 +62,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 2. Clone and install:
 
 ```
-git clone https://github.com/ckbaker10/nagios-plugins.git /opt/nagios-plugins-lukas
+git clone https://github.com/ckbaker10/nagios-plugins-custom.git /opt/nagios-plugins-lukas
 cd /opt/nagios-plugins-lukas
 sudo ./install.sh
 ```
