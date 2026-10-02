@@ -51,6 +51,13 @@
     remote_src: true
   when: nagios_plugins_custom_download is changed or not nagios_plugins_custom_buildinfo.stat.exists
 
+# unarchive can report success without extracting anything when tar fails
+- name: Verify unpacked bundle
+  ansible.builtin.stat:
+    path: "{{ nagios_plugins_custom_install_prefix }}/BUILDINFO"
+  register: nagios_plugins_custom_unpacked
+  failed_when: not nagios_plugins_custom_unpacked.stat.exists
+
 # check_lpr binds a privileged source port (RFC 1179). The bundled python
 # loads libpython via $ORIGIN, which the loader ignores for binaries with
 # capabilities, so a copy of the system python gets cap_net_bind_service.
