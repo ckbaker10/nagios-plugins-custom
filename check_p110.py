@@ -609,6 +609,68 @@ def device_lock(hostname, timeout):
             fcntl.flock(fh, fcntl.LOCK_UN)
 
 
+def _state_path(hostname, suffix):
+    return os.path.join(tempfile.gettempdir(),
+                        f"check_p110-{re.sub(r'[^A-Za-z0-9.-]', '_', hostname)}.{suffix}")
+
+
+def read_protocol_cache(hostname):
+    """Protocol that worked last time for this plug ("legacy"/"tpap")."""
+    try:
+        with open(_state_path(hostname, "protocol")) as fh:
+            value = fh.read().strip()
+        return value if value in ("legacy", "tpap") else None
+    except OSError:
+        return None
+
+
+def write_protocol_cache(hostname, protocol):
+    path = _state_path(hostname, "protocol")
+    try:
+        if protocol is None:
+            os.unlink(path)
+        else:
+            with open(path, "w") as fh:
+                fh.write(protocol + "\n")
+            os.chmod(path, 0o666)
+    except OSError:
+        pass
+
+
+def query_device_tpap(args):
+    """TPAP (newer Tapo firmware without KLAP) via python-kasa.
+
+    Returns the same raw get_device_info / get_energy_usage data as
+    query_device, so the evaluation is identical for both protocols.
+    """
+    import asyncio
+    try:
+        from kasa import Credentials, Discover
+    except ImportError as e:
+        raise RuntimeError(f"TPAP needs python-kasa with TPAP support: {e}")
+
+    if not args.verbose:
+        logging.getLogger("kasa").setLevel(logging.CRITICAL)
+
+    async def run():
+        dev = await Discover.discover_single(
+            args.hostname, credentials=Credentials(args.email, args.password),
+            timeout=args.timeout)
+        if dev is None:
+            raise ConnectionError(f"no discovery answer from {args.hostname}")
+        try:
+            await dev.update()
+            info = dict(dev.sys_info)
+            energy = (getattr(dev, "_last_update", None) or {}).get("get_energy_usage")
+        finally:
+            await dev.disconnect()
+        if args.verbose:
+            print(f"DEBUG: TPAP via {type(dev.protocol._transport).__name__}")
+        return {"error_code": 0, "result": info}, energy
+
+    return asyncio.run(run())
+
+
 def query_device(args):
     """Handshake, login and read device info and energy usage (one session)."""
     p110 = P110(args.hostname, args.email, args.password)
@@ -647,18 +709,36 @@ def check_p110_status(args) -> tuple:
         # serialized with a lock, and transient failures (also short WiFi
         # dropouts) are retried with a fresh handshake.
         with device_lock(args.hostname, args.lock_timeout):
+            protocol = args.protocol
+            if protocol == "auto":
+                protocol = read_protocol_cache(args.hostname) or "legacy"
             attempt = 0
             while True:
                 attempt += 1
                 try:
-                    device_info, energy_data = query_device(args)
+                    if protocol == "tpap":
+                        device_info, energy_data = query_device_tpap(args)
+                    else:
+                        device_info, energy_data = query_device(args)
                     break
                 except Exception as e:
+                    # Firmware that switched to TPAP rejects the KLAP
+                    # handshake with HTTP 403 (discovery: encrypt_type TPAP)
+                    if (args.protocol == "auto" and protocol == "legacy"
+                            and "Handshake1 failed with HTTP 403" in str(e)):
+                        if args.verbose:
+                            print("DEBUG: KLAP handshake rejected, trying TPAP")
+                        protocol = "tpap"
+                        continue
                     if attempt > args.retries:
+                        if args.protocol == "auto":
+                            write_protocol_cache(args.hostname, None)
                         raise
                     if args.verbose:
                         print(f"DEBUG: attempt {attempt} failed ({e}), retrying in {args.retry_delay}s")
                     time.sleep(args.retry_delay)
+            if args.protocol == "auto":
+                write_protocol_cache(args.hostname, protocol)
 
         if device_info["error_code"] != 0:
             return NAGIOS_CRITICAL, f"Device error: {device_info.get('msg', 'Unknown error')}"
@@ -859,6 +939,14 @@ Examples:
         help="Expected charging status (CRITICAL if different)"
     )
     
+    parser.add_argument(
+        "--protocol",
+        choices=["auto", "legacy", "tpap"],
+        default="auto",
+        help="auto: KLAP/passthrough, falls back to TPAP when the plug rejects "
+             "the KLAP handshake (remembered per plug); default: auto"
+    )
+
     parser.add_argument(
         "--retries",
         type=int,

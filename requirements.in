@@ -8,3 +8,7 @@ pyyaml       # check_compose
 psutil       # check_space_usage
 pycryptodome # check_p110
 pkcs7        # check_p110
+# check_p110: TPAP transport for Tapo firmware that dropped KLAP. Not yet in a
+# python-kasa release; pinned to the tested commit of PR #1592
+# (https://github.com/python-kasa/python-kasa/pull/1592)
+python-kasa @ https://github.com/ZeliardM/python-kasa/archive/e7084472972f08f2e2235b342f3964aedbfaeb3b.tar.gz
