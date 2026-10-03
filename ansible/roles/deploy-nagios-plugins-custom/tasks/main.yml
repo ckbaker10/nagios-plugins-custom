@@ -123,6 +123,20 @@
     group: "{{ nagios_plugins_custom_user }}"
     mode: '0755'
 
+# check_compose talks to the Docker daemon
+- name: Check for docker group
+  ansible.builtin.getent:
+    database: group
+    key: docker
+    fail_key: false
+
+- name: Add check user to docker group
+  ansible.builtin.user:
+    name: "{{ nagios_plugins_custom_user }}"
+    groups: docker
+    append: true
+  when: getent_group.docker is not none
+
 - name: Locate smartctl and hddtemp
   ansible.builtin.shell:
     cmd: "command -v {{ item }} || true"

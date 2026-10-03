@@ -6,12 +6,15 @@ My personal nagios plugins, suited for my environment
 
 ## Overview
 
-These plugins are tested only by me using them in my own environment
+These plugins are tested only by me using them in my own environment.
+They are shipped as one self-contained x86_64 bundle per release
+(current: [v1.4.0](https://github.com/ckbaker10/nagios-plugins-custom/releases/tag/v1.4.0))
+and installed with the Ansible role in `ansible/`.
 
 ## Available Plugins
 
 - check_gmodem2 - Telekom Glasfasermodem 2 fiber optic modem monitoring
-- check_p110 - TP-Link P110 smart plug monitoring with KLAP protocol
+- check_p110 - TP-Link Tapo P110 smart plug monitoring (passthrough, KLAP and TPAP)
 - check_jetdirect - Network printer monitoring via SNMP
 - check_goss - Infrastructure validation using Goss framework
 - check_compose - Docker Compose service health monitoring
@@ -21,6 +24,7 @@ These plugins are tested only by me using them in my own environment
 - check_lm_sensors - Hardware sensor monitoring (temperature, fans, voltages) and HDD temperatures
 - check_space_usage - Disk space usage analysis by directory (respects mount points, excludes network mounts)
 - check_lpr - LPD/LPR printer daemon protocol testing (RFC 1179)
+- notify_sms - Icinga2 notification command: SMS through an OpenWrt LTE router
 - check_lte_router - OpenWrt LTE router: SIM, registration, signal (RSRP/RSRQ/SINR), LTE data and internet (status script `sms-gateway/icinga-lte-status`, installed with `sms-gateway/install-status.sh`)
 
 For detailed plugin documentation see [README-CHECKS.md](README-CHECKS.md)
@@ -39,22 +43,23 @@ A plug accepts only one session at a time; checks of the same plug are
 serialized with a lock and transient errors are retried (`--retries`,
 `--retry-delay`, `--lock-timeout`).
 
-## TAPO KLAP Problems
+### Third-party Vendor Compatibility
 
-**Important:** Starting from firmware version 1.4 (released November 2025), you must enable **Third-party Vendor Compatibility** in the Tapo app settings to use the KLAP protocol with the P110 smart plug. Without this setting enabled, the plugin will not be able to communicate with the device.
-
-To enable third-party vendor compatibility:
+Local access to Tapo plugs requires **Third-party Vendor Compatibility** to
+be enabled in the Tapo app (device settings). Without it the plug rejects
+local logins. A plug that still fails with HTTP 403 while this is enabled
+most likely switched to TPAP, which `--protocol auto` handles.
 
 1. Open the Tapo app and select your P110 device
-   
+
    <img src="pics/tapo_1.jpeg" alt="Tapo App Device Selection" width="300">
 
 2. Navigate to device settings
-   
+
    <img src="pics/tapo_2.jpeg" alt="Tapo Device Settings" width="300">
 
 3. Enable "Third-party Vendor Compatibility"
-   
+
    <img src="pics/tapo_3.jpeg" alt="Enable Third-party Compatibility" width="300">
 
 ## Quick Start
@@ -83,7 +88,14 @@ The role (`ansible/roles/deploy-nagios-plugins-custom`):
   `check_lpr`
 - writes `/etc/sudoers.d/nagios-plugins` (smartctl, hddtemp, check_lpr;
   `sensors` needs no root)
+- adds the check user to the `docker` group if it exists (check_compose)
+- optional: SMS relay user and router key (`nagios_plugins_custom_sms_gateway`,
+  `nagios_plugins_custom_sms_relay_keys`) and the LTE status key
+  (`nagios_plugins_custom_lte_router`), see below
 - skips hosts that are not x86_64
+
+The check user defaults to `nagios` on Debian/Ubuntu and `icinga` on
+RHEL/SUSE (`nagios_plugins_custom_user`).
 
 Verify:
 
@@ -102,10 +114,27 @@ build/release.sh    # GitHub release v<version>, needs gh auth login
 The version comes from `pyproject.toml`. Dependencies: edit
 `requirements.in`, then lock with the command at its top.
 
+### Without Ansible
+
+```bash
+v=1.4.0
+curl -fLO https://github.com/ckbaker10/nagios-plugins-custom/releases/download/v$v/nagios-plugins-custom-$v-x86_64.tar.gz
+curl -fLO https://github.com/ckbaker10/nagios-plugins-custom/releases/download/v$v/nagios-plugins-custom-$v-x86_64.tar.gz.sha256
+sha256sum -c nagios-plugins-custom-$v-x86_64.tar.gz.sha256
+sudo tar -C / -xzf nagios-plugins-custom-$v-x86_64.tar.gz
+sudo ln -sfn /opt/nagios-plugins-custom-$v /opt/nagios-plugins-lukas
+```
+
+Then create the sudoers rules (`ansible/roles/deploy-nagios-plugins-custom/templates/sudoers.j2`)
+and, for `check_lpr`, a copy of the system python with
+`setcap cap_net_bind_service=+ep` as `/opt/nagios-plugins-custom-$v/python3-lpr`.
+
 ### Legacy installation
 
-`install.sh` (git checkout plus per-host uv venv) still works but is replaced
-by the bundle; it pulls unpinned dependencies on every host.
+`install.sh` and the shell wrappers `check_*` in the repository root belong
+to the old setup (git checkout plus per-host uv venv in `/opt/nagios-plugins-lukas`).
+They are replaced by the bundle, which generates its own wrappers; the
+legacy setup pulls unpinned dependencies on every host.
 
 ## SMS notifications (notify_sms, sms-gateway)
 
@@ -130,6 +159,19 @@ Icinga master --ssh--> agent: icinga-sms (forced command: notify_sms --relay)
   `sms-relay` in the home-network documentation). If the master reaches the
   router itself, use the NotificationCommand `sms-notification` from
   `commands-custom.conf`.
+
+## LTE router monitoring (check_lte_router)
+
+`sms-gateway/icinga-lte-status` runs on the router as forced command of a
+dedicated key and prints SIM, registration, operator, band,
+RSRP/RSRQ/RSSI/SINR, LTE data state and a ping through LTE. Setup:
+
+1. Agent: set `nagios_plugins_custom_lte_router` and run the role; it prints
+   the public key of the check user.
+2. Router: `sms-gateway/install-status.sh root@ROUTER PUBKEY_FILE`.
+3. Icinga: CheckCommand `check_lte_router` (`commands-custom.conf`), host
+   address = router; thresholds `lte_router_rsrp_warning`/`_critical`
+   (default −115/−125 dBm), `lte_router_sinr_warning`/`_critical` (0/−5 dB).
 
 ## Architecture
 
@@ -173,7 +215,7 @@ sudo systemctl reload nagios
 Copy the custom command definitions to your Icinga2 configuration:
 
 ```
-sudo cp /opt/nagios-plugins-lukas/icinga-custom-commands/commands-custom.conf /etc/icinga2/conf.d/
+sudo cp icinga-custom-commands/commands-custom.conf /etc/icinga2/conf.d/
 sudo systemctl reload icinga2
 ```
 
@@ -191,9 +233,12 @@ For environments using Icinga Director, follow these steps to import and configu
 
    Copy the command definitions to the global zone on your Icinga master (config endpoint):
    ```
-   sudo cp /opt/nagios-plugins-lukas/icinga-custom-commands/commands-custom.conf \
+   sudo cp icinga-custom-commands/commands-custom.conf \
        /etc/icinga2/zones.d/global-templates/
    ```
+
+   With [docker-compose-icinga](https://github.com/ckbaker10/docker-compose-icinga)
+   the global zone is the `global-zone/` directory of the compose project.
 
 2. **Import via Director Kickstart Wizard**
 
@@ -274,7 +319,7 @@ live in [nagios-plugins-general](https://github.com/ckbaker10/nagios-plugins-gen
 
 ### Docker Compose
 ```
-./check_compose -p icinga-playground --show-services
+./check_compose -p icinga-monitoring-main --show-services
 ./check_compose -f /opt/myapp/docker-compose.yml --unhealthy-warning
 ```
 
@@ -290,6 +335,21 @@ live in [nagios-plugins-general](https://github.com/ckbaker10/nagios-plugins-gen
 ./check_smart -g '/dev/sd[a-z]' -i scsi -q
 ```
 
+### Smart Plug (TPAP firmware, explicit)
+```
+./check_p110 -H 10.10.10.139 -u "user@example.com" -p "password" --expect-on --protocol tpap
+```
+
+### LTE Router
+```
+./check_lte_router --router root@10.10.10.210 --rsrp-warning -115 --rsrp-critical -125
+```
+
+### SMS (dry run)
+```
+./notify_sms --to +4917... --type PROBLEM --host "Pump" --service tapo-status-on --state CRITICAL --dry-run
+```
+
 ### Hardware Sensors
 ```
 ./check_lm_sensors --list
@@ -299,89 +359,59 @@ live in [nagios-plugins-general](https://github.com/ckbaker10/nagios-plugins-gen
 
 ## Docker Setup
 
-The check_compose plugin requires Docker access. The installation script automatically adds the nagios user to the docker group if Docker is installed.
-
-Note: Restart Nagios/Icinga service after installation for docker group changes to take effect.
+`check_compose` needs access to the Docker daemon. The Ansible role adds the
+check user to the `docker` group when that group exists; restart the Icinga
+agent afterwards so the new group membership takes effect.
 
 ## Dependencies
 
-All dependencies are managed by UV in an isolated virtual environment:
+Bundled in `lib/` of the release tarball, locked with SHA-256 hashes in
+`requirements.txt` (edit `requirements.in`, then re-lock with the command at
+its top):
 
-- requests - HTTP client library
-- pycryptodome - Cryptographic functions
-- pysnmp - SNMP protocol implementation
-- pydantic - Data validation
-- pkcs7 - Cryptographic padding
-- urllib3 - HTTP utilities
+- requests, urllib3 - HTTP (check_gmodem2, check_kindle, check_p110)
+- pycryptodome, pkcs7 - KLAP/passthrough encryption (check_p110)
+- python-kasa - TPAP transport (check_p110); pinned to commit `e7084472` of
+  [PR #1592](https://github.com/python-kasa/python-kasa/pull/1592) until a
+  release contains TPAP, plus its dependencies (aiohttp, cryptography,
+  ecdsa, passlib, mashumaro, …)
+- pyyaml - check_compose
+- psutil - check_space_usage
+
+System programs installed by the role: smartmontools, lm-sensors, net-snmp
+tools (snmpget/snmpwalk for check_eap772 and check_jetdirect), setcap. The
+bundle contains Python 3.12 and goss (check_goss).
 
 ## Troubleshooting
 
-### Permission Issues
+### Bundle
 
 ```
-sudo chown -R nagios:nagios /opt/nagios-plugins-lukas
-sudo chmod +x /opt/nagios-plugins-lukas/check_*
-```
-
-### Virtual Environment Issues
-
-```
-cd /opt/nagios-plugins-lukas
-sudo -u nagios uv venv .venv --clear
-sudo -u nagios uv pip install -e .
-```
-
-### Docker Access Issues
-
-```
-sudo usermod -aG docker nagios
-sudo systemctl restart nagios
-```
-
-### Test Plugin
-
-```
+cat /opt/nagios-plugins-lukas/BUILDINFO          # version, Python, goss, build OS
+readlink /opt/nagios-plugins-lukas               # active version
 sudo -u nagios /opt/nagios-plugins-lukas/check_p110 -H device.local -u user -p pass -v
 ```
 
-## Manual Installation
+### Tapo plugs
 
-If you prefer manual setup:
+- Sporadic HTTP 403 / "Invalid signature": two sessions on one plug at the
+  same time. Fixed by the per-plug lock; make sure all checks of a plug run
+  on the same agent.
+- Permanent HTTP 403 at handshake1: plug uses TPAP. Check with
+  `uvx --from python-kasa kasa --target BROADCAST discover raw`
+  (`encrypt_type`). The detected protocol is cached in
+  `/tmp/check_p110-<host>.protocol`; delete it to re-detect.
 
-```bash
-# Install dependencies
-uv venv .venv
-uv pip install -e .
+### Docker access
 
-# Set permissions
-sudo chown -R nagios:nagios /opt/nagios-plugins-lukas
-sudo chmod +x /opt/nagios-plugins-lukas/check_*
-
-# Add nagios to docker group (for check_compose)
-sudo usermod -aG docker nagios
-
-# Configure sudo rules for check_smart and check_lm_sensors
-sudo tee /etc/sudoers.d/nagios-plugins > /dev/null << 'EOF'
-# Nagios plugins - minimal permissions for hardware monitoring
-# Allow nagios user to run smartctl, sensors, and hddtemp without password
-Defaults:nagios !requiretty
-nagios ALL=(root) NOPASSWD: /usr/sbin/smartctl
-nagios ALL=(root) NOPASSWD: /usr/bin/sensors
-nagios ALL=(root) NOPASSWD: /usr/sbin/hddtemp
-EOF
-
-# Set correct permissions on sudoers file
-sudo chmod 0440 /etc/sudoers.d/nagios-plugins
-
-# Validate sudoers syntax
-sudo visudo -c -f /etc/sudoers.d/nagios-plugins
+```
+id -nG nagios        # must contain docker
 ```
 
-**Note:** The paths for `smartctl`, `sensors`, and `hddtemp` may vary by distribution:
-- Debian/Ubuntu: `/usr/sbin/smartctl`, `/usr/bin/sensors`, `/usr/sbin/hddtemp`
-- RHEL/CentOS: Check with `which smartctl sensors hddtemp`
+### Sensors
 
-Adjust the sudoers file paths accordingly for your system.
+`check_lm_sensors` calls `sensors -Aj` without sudo; on timeout (`-t`,
+default 15 s) it returns UNKNOWN instead of a traceback.
 
 ## Contributing
 
@@ -389,8 +419,9 @@ Adjust the sudoers file paths accordingly for your system.
 2. Include performance data in standard format
 3. Provide comprehensive error handling
 4. Add tests and documentation
-5. Update pyproject.toml for dependencies
+5. Add imported packages to requirements.in and re-lock requirements.txt
+6. Bump the version in pyproject.toml, `build/build.sh`, `build/release.sh`
 
 ## License
 
-GPLv3 - See LICENSE file for details.
+GPL-3.0-or-later (see `pyproject.toml`).

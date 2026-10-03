@@ -48,7 +48,11 @@ check_p110 -H <hostname> -u <email> -p <password> [options]
 ```
 
 **Key Features**:
-- Protocol auto-discovery (Passthrough/KLAP)
+- Protocols: passthrough, KLAP and TPAP (newer firmware); `--protocol auto`
+  falls back to TPAP when the plug rejects the KLAP handshake with HTTP 403
+  and remembers the protocol per plug (`/tmp/check_p110-<host>.protocol`)
+- One session per plug: checks of the same plug are serialized with a lock,
+  connection/session errors are retried with a fresh handshake
 - Device power state monitoring
 - Energy consumption tracking (current power, daily/monthly usage)
 - Signal strength monitoring (WiFi RSSI and signal level)
@@ -56,6 +60,11 @@ check_p110 -H <hostname> -u <email> -p <password> [options]
 - State expectation validation
 
 **Authentication**: Requires TP-Link cloud account credentials
+
+**Connection options**:
+- `--protocol auto|legacy|tpap` (default auto)
+- `--retries` (default 2), `--retry-delay` (default 3 s), `--lock-timeout` (default 30 s)
+- `-t/--timeout`: connection timeout in seconds (default 10)
 
 **Thresholds**:
 - `--power-warning/--power-critical`: Power consumption thresholds in Watts
@@ -480,20 +489,15 @@ check_goss [-g <goss_file>] [options]
 ## Installation Requirements
 
 ### Python Dependencies
-Install via pip or package manager:
-```bash
-pip install -r requirements.txt
-```
-
-Required packages:
-- requests (HTTP client)
-- pycryptodome (P110 encryption)
-- pkcs7 (P110 protocol support)
-- urllib3 (HTTP utilities)
+Bundled in the release tarball (standalone Python 3.12 plus `lib/`), locked
+with hashes in `requirements.txt`; see the Dependencies section of
+[README.md](README.md). No pip/venv on the hosts.
 
 ### System Dependencies
-- net-snmp-utils (for check_jetdirect)
-- goss binary (for check_goss)
+- net-snmp tools (check_jetdirect, check_eap772)
+- smartmontools (check_smart), lm-sensors (check_lm_sensors)
+- goss: included in the bundle (`bin/goss`)
+- Installed by the Ansible role `deploy-nagios-plugins-custom`
 
 ### File Permissions
 Ensure plugins are executable:
@@ -1196,9 +1200,11 @@ Common issues and solutions:
 - lm_sensors package installed (`sensors` binary)
 - Optional: hddtemp for drive temperature monitoring
 - Sensors must be properly configured (run `sensors-detect` first)
-- Root/sudo access may be required for hddtemp
+- Root/sudo access may be required for hddtemp; `sensors` runs without sudo
+- `sensors -Aj` is called once per check; `-t/--timeout` (default 15 s)
+  returns UNKNOWN if it does not finish
 
-**Version**: 3.1.0
+**Version**: 3.2.0
 
 **Plugin Type**: System Health Monitoring
 
@@ -1689,10 +1695,13 @@ Tests LPD (Line Printer Daemon) protocol connectivity and queue status. Implemen
 
 ### Usage
 ```bash
-sudo ./check_lpr -H <host> [options]
+./check_lpr -H <host> [options]
 ```
 
-**Note**: This plugin requires root privileges to bind to ports 721-731 as specified by RFC 1179.
+**Note**: RFC 1179 requires a source port 721-731. The bundle's `check_lpr`
+wrapper uses `python3-lpr` (a copy of the system python with
+`cap_net_bind_service`, created by the Ansible role) when present, so no
+sudo is needed. Without it, run the plugin as root.
 
 ### Parameters
 
@@ -1750,16 +1759,10 @@ object CheckCommand "check_lpr" {
 }
 ```
 
-**Important**: Configure sudo permissions for the nagios user:
-```bash
-# /etc/sudoers.d/nagios-lpr
-nagios ALL=(root) NOPASSWD: /opt/nagios-plugins-lukas/check_lpr
-```
-
-Or modify the command in Icinga to use sudo:
-```
-command = [ "sudo", "/opt/nagios-plugins-lukas/check_lpr" ]
-```
+**Permissions**: with the Ansible role, `python3-lpr` provides the
+privileged port and no sudo is needed. The role also keeps a sudoers rule
+for `/opt/nagios-plugins-lukas/check_lpr` as fallback; then use
+`command = [ "sudo", "/opt/nagios-plugins-lukas/check_lpr" ]`.
 
 ### Example Output
 
@@ -1846,3 +1849,65 @@ LPD protocol dates back to BSD Unix (1980s) and is still widely used for network
 - License: GNU General Public License (GPL) version 3
 
 ---
+
+## check_lte_router
+
+**Purpose**: Monitor an OpenWrt LTE router with a modem that accepts AT
+commands (tested: ZTE MF289F): SIM, network registration, signal, LTE data
+connection and internet reachability through LTE.
+
+**How it works**: Reads `KEY=VALUE` status lines via SSH from
+`sms-gateway/icinga-lte-status` on the router. The key used may only run that
+script (forced command). The script shares the modem lock with `icinga-sms`.
+
+**Usage**:
+```bash
+check_lte_router --router root@10.10.10.210 [options]
+```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| --router | root@10.10.10.210 | SSH target of the router |
+| --identity | /var/lib/nagios/.ssh/icinga-lte | SSH key (forced command icinga-lte-status) |
+| --known-hosts | /var/lib/nagios/.ssh/known_hosts_icinga_lte | Router host key |
+| --rsrp-warning / --rsrp-critical | -115 / -125 | RSRP thresholds in dBm (lower is worse) |
+| --sinr-warning / --sinr-critical | 0 / -5 | SINR thresholds in dB |
+| --allow-roaming | off | Do not warn when roaming |
+| -t, --timeout | 15 | SSH connect timeout |
+
+**States**:
+- CRITICAL: SIM not READY, not registered, LTE data interface down, no ping
+  through LTE, RSRP/SINR below critical
+- WARNING: RSRP/SINR below warning, roaming
+- UNKNOWN: router not reachable via SSH
+
+**Performance Data**: rsrp, rsrq, sinr, rssi, data_uptime
+
+**Icinga2**: CheckCommand `check_lte_router` in `commands-custom.conf`
+(variables `lte_router_*`, address from `$address$`).
+
+## notify_sms
+
+**Purpose**: Icinga2 notification command that sends an SMS through the LTE
+router (`sms-gateway/icinga-sms`, `AT+CMGS`). One SMS (max. 160 GSM
+characters) per notification: type, state, host, service, time, first line of
+the output.
+
+**Usage**:
+```bash
+notify_sms --to +4917... --type PROBLEM --host "Host" --service svc --state CRITICAL --output "..."
+notify_sms --relay < fields.txt     # KEY=VALUE lines: to, type, host, service, state, time, output
+notify_sms ... --dry-run            # print the message only
+```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| --gateway | root@10.10.10.210 | SSH target of the router |
+| --identity | /var/lib/nagios/.ssh/icinga-sms | Key with forced command icinga-sms |
+| --known-hosts | /var/lib/nagios/.ssh/known_hosts_icinga_sms | Router host key |
+| --retries | 2 | Retries (not for rejected numbers) |
+
+The router only sends to numbers in `/etc/icinga-sms.allow`. Icinga2 does not
+run notification commands on a `command_endpoint`; if only an agent reaches
+the router, the master pipes the fields to `notify_sms --relay` on that agent
+via SSH (see README.md, SMS notifications).
