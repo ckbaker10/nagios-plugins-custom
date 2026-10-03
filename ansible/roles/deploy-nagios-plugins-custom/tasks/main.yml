@@ -145,35 +145,38 @@
     validate: visudo -cf %s
 
 # SMS notifications (notify_sms): only on agents that can reach the LTE
-# router; the public key is then authorized on the router with
-# sms-gateway/install.sh
-- name: Set up SMS notification key
+# router. A dedicated user owns the router key; the Icinga master reaches it
+# via SSH with a key that may only run "notify_sms --relay" (Icinga 2 cannot
+# run notification commands on an agent). The router side is set up with
+# sms-gateway/install.sh using the key printed below.
+- name: Set up SMS relay
   when: nagios_plugins_custom_sms_gateway | length > 0
   block:
-    - name: Find home of the check user
-      ansible.builtin.getent:
-        database: passwd
-        key: "{{ nagios_plugins_custom_user }}"
+    - name: Create SMS relay user
+      ansible.builtin.user:
+        name: "{{ nagios_plugins_custom_sms_user }}"
+        system: true
+        shell: /bin/sh
+        home: "/var/lib/{{ nagios_plugins_custom_sms_user }}"
+        create_home: true
+        password: "!"
+        comment: Icinga SMS relay
 
-    - name: Set SSH paths for notify_sms
-      ansible.builtin.set_fact:
-        nagios_plugins_custom_ssh_dir: "{{ getent_passwd[nagios_plugins_custom_user][4] }}/.ssh"
-
-    - name: Create SSH directory
+    - name: Create SSH directory of the relay user
       ansible.builtin.file:
-        path: "{{ nagios_plugins_custom_ssh_dir }}"
+        path: "/var/lib/{{ nagios_plugins_custom_sms_user }}/.ssh"
         state: directory
-        owner: "{{ nagios_plugins_custom_user }}"
-        group: "{{ nagios_plugins_custom_user }}"
+        owner: "{{ nagios_plugins_custom_sms_user }}"
+        group: "{{ nagios_plugins_custom_sms_user }}"
         mode: '0700'
 
-    - name: Generate SMS gateway key
+    - name: Generate router key
       community.crypto.openssh_keypair:
-        path: "{{ nagios_plugins_custom_ssh_dir }}/icinga-sms"
+        path: "/var/lib/{{ nagios_plugins_custom_sms_user }}/.ssh/icinga-sms"
         type: ed25519
         comment: "icinga-sms@{{ ansible_facts['hostname'] }}"
-        owner: "{{ nagios_plugins_custom_user }}"
-        group: "{{ nagios_plugins_custom_user }}"
+        owner: "{{ nagios_plugins_custom_sms_user }}"
+        group: "{{ nagios_plugins_custom_sms_user }}"
       register: nagios_plugins_custom_sms_key
 
     - name: Read router host key
@@ -185,10 +188,22 @@
     - name: Store router host key
       ansible.builtin.copy:
         content: "{{ nagios_plugins_custom_sms_hostkey.stdout }}\n"
-        dest: "{{ nagios_plugins_custom_ssh_dir }}/known_hosts_icinga_sms"
-        owner: "{{ nagios_plugins_custom_user }}"
-        group: "{{ nagios_plugins_custom_user }}"
+        dest: "/var/lib/{{ nagios_plugins_custom_sms_user }}/.ssh/known_hosts_icinga_sms"
+        owner: "{{ nagios_plugins_custom_sms_user }}"
+        group: "{{ nagios_plugins_custom_sms_user }}"
         mode: '0644'
+
+    - name: Authorize relay keys (forced command notify_sms --relay)
+      ansible.builtin.copy:
+        content: |
+          # Managed by Ansible (deploy-nagios-plugins-custom)
+          {% for k in nagios_plugins_custom_sms_relay_keys %}
+          {{ 'from="' ~ k.from ~ '",' if k.from | default('') else '' }}command="{{ nagios_plugins_custom_link }}/notify_sms --relay --gateway root@{{ nagios_plugins_custom_sms_gateway }} --identity /var/lib/{{ nagios_plugins_custom_sms_user }}/.ssh/icinga-sms --known-hosts /var/lib/{{ nagios_plugins_custom_sms_user }}/.ssh/known_hosts_icinga_sms",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding {{ k.key }}
+          {% endfor %}
+        dest: "/var/lib/{{ nagios_plugins_custom_sms_user }}/.ssh/authorized_keys"
+        owner: "{{ nagios_plugins_custom_sms_user }}"
+        group: "{{ nagios_plugins_custom_sms_user }}"
+        mode: '0600'
 
     - name: Show public key to authorize on the router
       ansible.builtin.debug:

@@ -3,14 +3,20 @@
 notify_sms - Icinga2 notification command that sends an SMS through the LTE
 router's modem (sms-gateway/icinga-sms on the router).
 
-The router is only reachable from the home network, so the notification runs
-on an agent there (Notification.command_endpoint). The SMS is handed over via
-SSH with a dedicated key whose only allowed command on the router is
-icinga-sms; the router accepts only numbers from its allow list.
+The router is only reachable from the home network, so this runs on a host
+there. The SMS is handed over via SSH with a dedicated key whose only allowed
+command on the router is icinga-sms; the router accepts only numbers from its
+allow list.
 
 Example:
   notify_sms --to +4917... --type PROBLEM --host "P03 Hebepumpe Haus" \\
       --service tapo-status-on --state CRITICAL --output "Device OFF"
+
+Relay mode (--relay): the notification fields are read as KEY=VALUE lines
+from stdin (to, type, host, service, state, time, output). Used as SSH
+forced command on the agent when the Icinga master itself cannot reach the
+router: Icinga 2 does not run notification commands on a command_endpoint,
+so the master pipes the fields to the agent via SSH.
 """
 
 import argparse
@@ -18,7 +24,7 @@ import subprocess
 import sys
 import time
 
-__version__ = '1.0.0'
+__version__ = '1.1.0'
 
 
 def build_message(args) -> str:
@@ -45,13 +51,27 @@ def send(args, message: str) -> subprocess.CompletedProcess:
                           timeout=args.timeout + 90)
 
 
+RELAY_FIELDS = ("to", "type", "host", "service", "state", "time", "output")
+
+
+def read_relay_fields(args):
+    """Fill notification fields from KEY=VALUE lines on stdin (max. 4 KiB)."""
+    for line in sys.stdin.read(4096).splitlines():
+        key, sep, value = line.partition("=")
+        key = key.strip().lower()
+        if sep and key in RELAY_FIELDS:
+            setattr(args, key, value.strip())
+
+
 def main():
     parser = argparse.ArgumentParser(description="Send an Icinga2 notification as SMS via the LTE router")
-    parser.add_argument("--to", required=True, help="Recipient number (must be allowed on the router)")
+    parser.add_argument("--relay", action="store_true",
+                        help="Read to/type/host/service/state/time/output as KEY=VALUE lines from stdin")
+    parser.add_argument("--to", help="Recipient number (must be allowed on the router)")
     parser.add_argument("--type", default="PROBLEM", help="Notification type ($notification.type$)")
-    parser.add_argument("--host", required=True, help="Host display name")
+    parser.add_argument("--host", default="", help="Host display name")
     parser.add_argument("--service", default="", help="Service name (empty for host notifications)")
-    parser.add_argument("--state", required=True, help="State ($service.state$ / $host.state$)")
+    parser.add_argument("--state", default="", help="State ($service.state$ / $host.state$)")
     parser.add_argument("--output", default="", help="Plugin output")
     parser.add_argument("--time", default="", help="Short time stamp, e.g. $icinga.short_date_time$")
     parser.add_argument("--gateway", default="root@10.10.10.210", help="SSH target of the router (default: root@10.10.10.210)")
@@ -64,6 +84,11 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="Print the message instead of sending")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     args = parser.parse_args()
+    if args.relay:
+        read_relay_fields(args)
+    if not args.to or not args.host or not args.state:
+        print("SMS failed: --to, --host and --state are required", file=sys.stderr)
+        return 2
 
     message = build_message(args)
     if args.dry_run:

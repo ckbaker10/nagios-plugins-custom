@@ -1,6 +1,6 @@
 ---
 # Version of the prebuilt bundle (build/build.sh, version from pyproject.toml)
-nagios_plugins_custom_version: "1.2.0"
+nagios_plugins_custom_version: "1.2.1"
 nagios_plugins_custom_install_prefix: "/opt/nagios-plugins-custom-{{ nagios_plugins_custom_version }}"
 
 # Stable path used by the Icinga2 CheckCommands (commands-custom.conf); was a
@@ -29,3 +29,11 @@ nagios_plugins_custom_goss_dir: "/opt/goss"
 # Host/IP of the LTE router for SMS notifications (notify_sms); empty = no
 # SMS setup. Set only for agents in the router's network (e.g. mini).
 nagios_plugins_custom_sms_gateway: ""
+
+# User on the SMS agent that owns the router key and receives relayed
+# notifications from the Icinga master
+nagios_plugins_custom_sms_user: "icinga-sms"
+
+# Public keys allowed to relay SMS notifications to this agent:
+# [{key: "ssh-ed25519 AAAA... icinga@master", from: "10.200.200.1"}]
+nagios_plugins_custom_sms_relay_keys: []
