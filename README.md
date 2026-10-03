@@ -24,6 +24,20 @@ These plugins are tested only by me using them in my own environment
 
 For detailed plugin documentation see [README-CHECKS.md](README-CHECKS.md)
 
+## Tapo protocols (KLAP and TPAP)
+
+`check_p110` speaks KLAP and the older passthrough protocol. Plugs on newer
+firmware (seen with 1.4.0 Build 251020) switched to **TPAP** and reject the
+KLAP handshake with HTTP 403. With `--protocol auto` (default) the plugin
+then uses TPAP via python-kasa (pinned to the tested commit of
+[python-kasa PR #1592](https://github.com/python-kasa/python-kasa/pull/1592),
+not yet released) and remembers the protocol per plug in the temp dir.
+Force with `--protocol legacy` or `--protocol tpap`.
+
+A plug accepts only one session at a time; checks of the same plug are
+serialized with a lock and transient errors are retried (`--retries`,
+`--retry-delay`, `--lock-timeout`).
+
 ## TAPO KLAP Problems
 
 **Important:** Starting from firmware version 1.4 (released November 2025), you must enable **Third-party Vendor Compatibility** in the Tapo app settings to use the KLAP protocol with the P110 smart plug. Without this setting enabled, the plugin will not be able to communicate with the device.
