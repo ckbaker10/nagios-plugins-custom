@@ -92,6 +92,30 @@ The version comes from `pyproject.toml`. Dependencies: edit
 `install.sh` (git checkout plus per-host uv venv) still works but is replaced
 by the bundle; it pulls unpinned dependencies on every host.
 
+## SMS notifications (notify_sms, sms-gateway)
+
+Icinga2 notifications as SMS through an OpenWrt LTE router with a modem that
+accepts AT commands (tested: ZTE MF289F).
+
+```
+Icinga master --ssh--> agent: icinga-sms (forced command: notify_sms --relay)
+                         --ssh--> router: icinga-sms (forced command, allow list) --AT+CMGS--> SMS
+```
+
+- `sms-gateway/icinga-sms` on the router sends one SMS via the modem's AT
+  port, only to numbers in `/etc/icinga-sms.allow`, GSM-safe text, max. 160
+  characters. Install with
+  `sms-gateway/install.sh root@ROUTER AGENT_PUBKEY +49...`.
+- `notify_sms` sends via the router; `--relay` reads the fields as
+  `KEY=VALUE` lines from stdin. The role creates the relay user
+  (`nagios_plugins_custom_sms_gateway`, `nagios_plugins_custom_sms_relay_keys`).
+- Icinga 2.15 does not execute notification commands on a
+  `command_endpoint`, so when only the agent can reach the router, the
+  master pipes the fields to the agent via SSH (example: NotificationCommand
+  `sms-relay` in the home-network documentation). If the master reaches the
+  router itself, use the NotificationCommand `sms-notification` from
+  `commands-custom.conf`.
+
 ## Architecture
 
 - Python scripts: plugin logic
