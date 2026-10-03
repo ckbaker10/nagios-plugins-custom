@@ -209,6 +209,56 @@
       ansible.builtin.debug:
         msg: "sms-gateway/install.sh root@{{ nagios_plugins_custom_sms_gateway }} <pubkey> +49...: {{ nagios_plugins_custom_sms_key.public_key }}"
 
+# check_lte_router: the check user reads the router status via SSH with a
+# key that may only run icinga-lte-status there (router side:
+# sms-gateway/install-status.sh with the key printed below)
+- name: Set up LTE router status key
+  when: nagios_plugins_custom_lte_router | length > 0
+  block:
+    - name: Find home of the check user
+      ansible.builtin.getent:
+        database: passwd
+        key: "{{ nagios_plugins_custom_user }}"
+
+    - name: Set SSH directory of the check user
+      ansible.builtin.set_fact:
+        nagios_plugins_custom_check_ssh_dir: "{{ getent_passwd[nagios_plugins_custom_user][4] }}/.ssh"
+
+    - name: Create SSH directory of the check user
+      ansible.builtin.file:
+        path: "{{ nagios_plugins_custom_check_ssh_dir }}"
+        state: directory
+        owner: "{{ nagios_plugins_custom_user }}"
+        group: "{{ nagios_plugins_custom_user }}"
+        mode: '0700'
+
+    - name: Generate LTE status key
+      community.crypto.openssh_keypair:
+        path: "{{ nagios_plugins_custom_check_ssh_dir }}/icinga-lte"
+        type: ed25519
+        comment: "icinga-lte@{{ ansible_facts['hostname'] }}"
+        owner: "{{ nagios_plugins_custom_user }}"
+        group: "{{ nagios_plugins_custom_user }}"
+      register: nagios_plugins_custom_lte_key
+
+    - name: Read router host key for check_lte_router
+      ansible.builtin.command:
+        cmd: "ssh-keyscan -t ed25519 {{ nagios_plugins_custom_lte_router }}"
+      register: nagios_plugins_custom_lte_hostkey
+      changed_when: false
+
+    - name: Store router host key for check_lte_router
+      ansible.builtin.copy:
+        content: "{{ nagios_plugins_custom_lte_hostkey.stdout }}\n"
+        dest: "{{ nagios_plugins_custom_check_ssh_dir }}/known_hosts_icinga_lte"
+        owner: "{{ nagios_plugins_custom_user }}"
+        group: "{{ nagios_plugins_custom_user }}"
+        mode: '0644'
+
+    - name: Show public key to authorize on the router
+      ansible.builtin.debug:
+        msg: "sms-gateway/install-status.sh root@{{ nagios_plugins_custom_lte_router }} <pubkey>: {{ nagios_plugins_custom_lte_key.public_key }}"
+
 - name: Verify installation
   ansible.builtin.command:
     cmd: "{{ nagios_plugins_custom_link }}/check_lm_sensors --version"

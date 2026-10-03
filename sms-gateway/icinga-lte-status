@@ -1,0 +1,68 @@
+#!/bin/sh
+# shellcheck disable=SC3045 # BusyBox ash (OpenWrt) supports read -t
+# icinga-lte-status: read-only LTE status of the OpenWrt router for
+# check_lte_router. Prints KEY=VALUE lines.
+#
+# Runs as the forced command of the monitoring key in
+# /etc/dropbear/authorized_keys:
+#   command="/usr/bin/icinga-lte-status",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding ssh-ed25519 ...
+#
+# Shares the modem lock with icinga-sms, so status queries never interleave
+# with sending an SMS on the AT port.
+
+PORT=${ICINGA_SMS_PORT:-/dev/ttyUSB2}
+LOCK=/var/lock/icinga-sms
+LTE_IF=${ICINGA_LTE_IF:-LTE_4}
+PING_TARGET=${ICINGA_LTE_PING:-1.1.1.1}
+
+lock "$LOCK"
+trap 'lock -u "$LOCK"' EXIT
+
+stty -F "$PORT" 115200 raw -echo 2>/dev/null
+exec 3<>"$PORT"
+
+# Print the answer lines of one AT command (without echo and OK)
+at() {
+    printf '%s\r' "$1" >&3
+    while read -t 3 -r line <&3; do
+        line=$(echo "$line" | tr -d '\r')
+        case "$line" in
+            ''|"$1") ;;
+            OK) return 0 ;;
+            ERROR*|+CME\ ERROR*) echo "$line"; return 1 ;;
+            *) echo "$line" ;;
+        esac
+    done
+    return 1
+}
+
+at 'ATE0' >/dev/null
+echo "sim=$(at 'AT+CPIN?' | sed -n 's/^+CPIN: *//p')"
+# +CEREG: <n>,<stat>  stat 1 = home network, 5 = roaming
+echo "reg=$(at 'AT+CEREG?' | sed -n 's/^+CEREG: *[0-9]*, *\([0-9]*\).*/\1/p')"
+# +COPS: <mode>,<format>,"<operator>",<AcT>  AcT 7 = LTE
+cops=$(at 'AT+COPS?' | sed -n 's/^+COPS: *//p')
+echo "operator=$(echo "$cops" | cut -d'"' -f2)"
+echo "act=$(echo "$cops" | awk -F, '{print $4}')"
+# +ZRSSI: <rsrp>,<rsrq>,<rssi>,<sinr> (ZTE)
+zrssi=$(at 'AT+ZRSSI' | sed -n 's/^+ZRSSI: *//p')
+echo "rsrp=$(echo "$zrssi" | cut -d, -f1)"
+echo "rsrq=$(echo "$zrssi" | cut -d, -f2)"
+echo "rssi=$(echo "$zrssi" | cut -d, -f3)"
+echo "sinr=$(echo "$zrssi" | cut -d, -f4)"
+# +ZCELLINFO: <cell id>, <pci>, <band>, <channel>
+echo "band=$(at 'AT+ZCELLINFO?' | sed -n 's/^+ZCELLINFO: *//p' | cut -d, -f3 | sed 's/^ *//')"
+exec 3>&-
+lock -u "$LOCK"
+trap - EXIT
+
+status=$(ubus call "network.interface.$LTE_IF" status 2>/dev/null)
+echo "data_up=$(echo "$status" | jsonfilter -e '@.up' 2>/dev/null)"
+echo "data_uptime=$(echo "$status" | jsonfilter -e '@.uptime' 2>/dev/null)"
+dev=$(echo "$status" | jsonfilter -e '@.l3_device' 2>/dev/null)
+if [ -n "$dev" ] && ping -c 2 -W 3 -I "$dev" "$PING_TARGET" >/dev/null 2>&1; then
+    echo "internet=1"
+else
+    echo "internet=0"
+fi
+echo "uptime=$(cut -d. -f1 /proc/uptime)"
