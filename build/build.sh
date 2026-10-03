@@ -72,8 +72,8 @@ rm -rf "${DIST_DIR:?}/$NAME.tar.gz" "${DIST_DIR:?}/$NAME.tar.gz.sha256"
             awk "{print \$1\"  $stage/bin/goss\"}" | sha256sum -c --quiet
         chmod 755 "$stage/bin/goss"
 
-        cp /src/check_*.py "$stage/"
-        for plugin in /src/check_*.py; do
+        cp /src/check_*.py /src/notify_*.py "$stage/"
+        for plugin in /src/check_*.py /src/notify_*.py; do
             name="$(basename "$plugin" .py)"
             case "$name" in
                 check_lpr)
@@ -110,7 +110,7 @@ goss=$GOSS_VERSION
 build_os=$(. /etc/os-release; echo "$PRETTY_NAME")
 prefix=$PREFIX
 EOF
-        "$stage/python/bin/python3" -m compileall -q "$stage/lib" "$stage"/check_*.py >/dev/null || true
+        "$stage/python/bin/python3" -m compileall -q "$stage/lib" "$stage"/check_*.py "$stage"/notify_*.py >/dev/null || true
         tar -C /stage --numeric-owner --owner=0 --group=0 -czf "/dist/$NAME.tar.gz" "${PREFIX#/}"
     '
 

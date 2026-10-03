@@ -14,8 +14,13 @@ Copyright (C) 2024 - Based on PyP100 library with KLAP protocol support
 """
 
 import argparse
+import contextlib
+import fcntl
 import json
+import os
+import re
 import sys
+import tempfile
 import logging
 import time
 import traceback
@@ -580,6 +585,53 @@ class P110(P100):
         return self._klap_request(payload, verbose)
 
 
+@contextlib.contextmanager
+def device_lock(hostname, timeout):
+    """Serialize checks of one plug on this host (one KLAP session per plug)."""
+    path = os.path.join(tempfile.gettempdir(), f"check_p110-{re.sub(r'[^A-Za-z0-9.-]', '_', hostname)}.lock")
+    with open(path, "a") as fh:
+        try:
+            os.chmod(path, 0o666)
+        except OSError:
+            pass
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() > deadline:
+                    raise TimeoutError(f"another check of {hostname} is still running")
+                time.sleep(0.5)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def query_device(args):
+    """Handshake, login and read device info and energy usage (one session)."""
+    p110 = P110(args.hostname, args.email, args.password)
+    if args.verbose:
+        print(f"DEBUG: P110 object created with terminalUUID: {p110.terminalUUID}")
+    p110.handshake(verbose=args.verbose)
+    p110.login(verbose=args.verbose)
+    device_info = p110.get_device_info(verbose=args.verbose)
+    if args.verbose:
+        print(f"DEBUG: Device info response: {json.dumps(device_info, indent=2)}")
+
+    energy_data = None
+    try:
+        energy_info = p110.get_energy_usage()
+        if energy_info["error_code"] == 0:
+            energy_data = energy_info["result"]
+    except Exception as e:
+        # Energy usage might not be available on all models
+        if args.verbose:
+            print(f"DEBUG: Energy data not available: {e}")
+    return device_info, energy_data
+
+
 def check_p110_status(args) -> tuple:
     """Check P110 status and return Nagios result"""
     try:
@@ -588,33 +640,29 @@ def check_p110_status(args) -> tuple:
             print(f"DEBUG: Using email: {args.email}")
             print(f"DEBUG: Timeout: {args.timeout}s")
         
-        # Initialize device
-        p110 = P110(args.hostname, args.email, args.password)
-        
-        if args.verbose:
-            print(f"DEBUG: P110 object created with terminalUUID: {p110.terminalUUID}")
-        
-        # Connect and authenticate
-        if args.verbose:
-            print("DEBUG: Starting handshake...")
-        p110.handshake(verbose=args.verbose)
-        
-        if args.verbose:
-            print("DEBUG: Handshake successful, starting login...")
-        p110.login(verbose=args.verbose)
-        
-        if args.verbose:
-            print("DEBUG: Login successful, getting device info...")
-        
-        # Get device information
-        device_info = p110.get_device_info(verbose=args.verbose)
-        
-        if args.verbose:
-            print(f"DEBUG: Device info response: {json.dumps(device_info, indent=2)}")
-            
+        # A plug keeps only one KLAP session: a second handshake (e.g. the
+        # tapo-stats and tapo-status-on services hitting the same plug at the
+        # same time) invalidates the first one, which then fails with HTTP 403
+        # or "Invalid signature". Checks of the same plug are therefore
+        # serialized with a lock, and transient failures (also short WiFi
+        # dropouts) are retried with a fresh handshake.
+        with device_lock(args.hostname, args.lock_timeout):
+            attempt = 0
+            while True:
+                attempt += 1
+                try:
+                    device_info, energy_data = query_device(args)
+                    break
+                except Exception as e:
+                    if attempt > args.retries:
+                        raise
+                    if args.verbose:
+                        print(f"DEBUG: attempt {attempt} failed ({e}), retrying in {args.retry_delay}s")
+                    time.sleep(args.retry_delay)
+
         if device_info["error_code"] != 0:
             return NAGIOS_CRITICAL, f"Device error: {device_info.get('msg', 'Unknown error')}"
-        
+
         device_result = device_info["result"]
         device_on = device_result.get("device_on", False)
         device_name = b64decode(device_result.get("nickname", "")).decode("utf-8") if device_result.get("nickname") else "Unknown"
@@ -623,33 +671,13 @@ def check_p110_status(args) -> tuple:
         power_protection_status = device_result.get("power_protection_status", "unknown")
         overcurrent_status = device_result.get("overcurrent_status", "unknown")
         charging_status = device_result.get("charging_status", "unknown")
-        
+
         if args.verbose:
             print(f"DEBUG: Device name: {device_name}")
             print(f"DEBUG: Device on: {device_on}")
             print(f"DEBUG: Signal level: {signal_level}")
             print(f"DEBUG: RSSI: {rssi}")
-            print(f"DEBUG: Power protection status: {power_protection_status}")
-            print(f"DEBUG: Overcurrent status: {overcurrent_status}")
-            print(f"DEBUG: Charging status: {charging_status}")
-        
-        # Get energy usage if it's a P110
-        energy_data = None
-        try:
-            if args.verbose:
-                print("DEBUG: Attempting to get energy usage...")
-            energy_info = p110.get_energy_usage()
-            if args.verbose:
-                print(f"DEBUG: Energy info response: {json.dumps(energy_info, indent=2)}")
-            if energy_info["error_code"] == 0:
-                energy_data = energy_info["result"]
-                if args.verbose:
-                    print(f"DEBUG: Energy data retrieved successfully")
-        except Exception as e:
-            # Energy usage might not be available on all models
-            if args.verbose:
-                print(f"DEBUG: Energy data not available: {e}")
-        
+
         # Build status message
         status_parts = []
         performance_data = []
@@ -831,6 +859,27 @@ Examples:
         help="Expected charging status (CRITICAL if different)"
     )
     
+    parser.add_argument(
+        "--retries",
+        type=int,
+        default=2,
+        help="Retries with a fresh handshake after connection/session errors (default: 2)"
+    )
+
+    parser.add_argument(
+        "--retry-delay",
+        type=float,
+        default=3,
+        help="Seconds between retries (default: 3)"
+    )
+
+    parser.add_argument(
+        "--lock-timeout",
+        type=float,
+        default=30,
+        help="Max. seconds to wait for another check of the same plug (default: 30)"
+    )
+
     parser.add_argument(
         "-v", "--verbose",
         action="store_true",

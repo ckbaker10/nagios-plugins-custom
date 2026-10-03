@@ -144,6 +144,56 @@
     mode: '0440'
     validate: visudo -cf %s
 
+# SMS notifications (notify_sms): only on agents that can reach the LTE
+# router; the public key is then authorized on the router with
+# sms-gateway/install.sh
+- name: Set up SMS notification key
+  when: nagios_plugins_custom_sms_gateway | length > 0
+  block:
+    - name: Find home of the check user
+      ansible.builtin.getent:
+        database: passwd
+        key: "{{ nagios_plugins_custom_user }}"
+
+    - name: Set SSH paths for notify_sms
+      ansible.builtin.set_fact:
+        nagios_plugins_custom_ssh_dir: "{{ getent_passwd[nagios_plugins_custom_user][4] }}/.ssh"
+
+    - name: Create SSH directory
+      ansible.builtin.file:
+        path: "{{ nagios_plugins_custom_ssh_dir }}"
+        state: directory
+        owner: "{{ nagios_plugins_custom_user }}"
+        group: "{{ nagios_plugins_custom_user }}"
+        mode: '0700'
+
+    - name: Generate SMS gateway key
+      community.crypto.openssh_keypair:
+        path: "{{ nagios_plugins_custom_ssh_dir }}/icinga-sms"
+        type: ed25519
+        comment: "icinga-sms@{{ ansible_facts['hostname'] }}"
+        owner: "{{ nagios_plugins_custom_user }}"
+        group: "{{ nagios_plugins_custom_user }}"
+      register: nagios_plugins_custom_sms_key
+
+    - name: Read router host key
+      ansible.builtin.command:
+        cmd: "ssh-keyscan -t ed25519 {{ nagios_plugins_custom_sms_gateway }}"
+      register: nagios_plugins_custom_sms_hostkey
+      changed_when: false
+
+    - name: Store router host key
+      ansible.builtin.copy:
+        content: "{{ nagios_plugins_custom_sms_hostkey.stdout }}\n"
+        dest: "{{ nagios_plugins_custom_ssh_dir }}/known_hosts_icinga_sms"
+        owner: "{{ nagios_plugins_custom_user }}"
+        group: "{{ nagios_plugins_custom_user }}"
+        mode: '0644'
+
+    - name: Show public key to authorize on the router
+      ansible.builtin.debug:
+        msg: "sms-gateway/install.sh root@{{ nagios_plugins_custom_sms_gateway }} <pubkey> +49...: {{ nagios_plugins_custom_sms_key.public_key }}"
+
 - name: Verify installation
   ansible.builtin.command:
     cmd: "{{ nagios_plugins_custom_link }}/check_lm_sensors --version"

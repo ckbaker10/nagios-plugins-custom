@@ -1,6 +1,6 @@
 ---
 # Version of the prebuilt bundle (build/build.sh, version from pyproject.toml)
-nagios_plugins_custom_version: "1.1.0"
+nagios_plugins_custom_version: "1.2.0"
 nagios_plugins_custom_install_prefix: "/opt/nagios-plugins-custom-{{ nagios_plugins_custom_version }}"
 
 # Stable path used by the Icinga2 CheckCommands (commands-custom.conf); was a
@@ -25,3 +25,7 @@ nagios_plugins_custom_packages:
 
 # Directory for check_goss (goss.yaml is host specific and not managed here)
 nagios_plugins_custom_goss_dir: "/opt/goss"
+
+# Host/IP of the LTE router for SMS notifications (notify_sms); empty = no
+# SMS setup. Set only for agents in the router's network (e.g. mini).
+nagios_plugins_custom_sms_gateway: ""

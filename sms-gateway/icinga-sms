@@ -1,0 +1,92 @@
+#!/bin/sh
+# shellcheck disable=SC3045 # BusyBox ash (OpenWrt) supports read -t/-n
+# icinga-sms: send one SMS through the LTE modem's AT port (OpenWrt router).
+#
+# Runs as the forced command of a dedicated SSH key in
+# /etc/dropbear/authorized_keys, so that key can do nothing but this:
+#   command="/usr/bin/icinga-sms",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding ssh-ed25519 ...
+#
+# Client side:  echo "message" | ssh -i KEY root@ROUTER send +4917...
+# Only numbers listed in /etc/icinga-sms.allow (one per line) are accepted.
+#
+# Exit codes: 0 sent, 2 usage, 3 number not allowed, 4 modem error
+
+ALLOW=/etc/icinga-sms.allow
+PORT=${ICINGA_SMS_PORT:-/dev/ttyUSB2}
+LOCK=/var/lock/icinga-sms
+
+# shellcheck disable=SC2086 # split "send NUMBER" into words
+set -- ${SSH_ORIGINAL_COMMAND:-$*}
+if [ "$1" != "send" ] || [ -z "$2" ]; then
+    echo "usage: send NUMBER   (message on stdin)" >&2
+    exit 2
+fi
+number="$2"
+case "$number" in
+    +[0-9]*|[0-9]*) ;;
+    *) echo "invalid number" >&2; exit 2 ;;
+esac
+if ! grep -qx "$number" "$ALLOW" 2>/dev/null; then
+    echo "number not allowed" >&2
+    logger -t icinga-sms "rejected number ending ${number#"${number%????}"}"
+    exit 3
+fi
+
+# GSM 7-bit default alphabet only: transliterate umlauts, drop everything
+# outside a safe ASCII subset, max. 160 characters (one SMS)
+msg=$(head -c 1000 | tr '\r\n\t' '   ' |
+    sed -e 's/ä/ae/g; s/ö/oe/g; s/ü/ue/g; s/Ä/Ae/g; s/Ö/Oe/g; s/Ü/Ue/g; s/ß/ss/g' |
+    tr -cd 'A-Za-z0-9 .,:;!?+/()%=#*&<>@_-' | tr -s ' ' | cut -c1-160)
+[ -n "$msg" ] || msg="Icinga notification"
+
+lock "$LOCK"
+trap 'lock -u "$LOCK"' EXIT
+
+stty -F "$PORT" 115200 raw -echo 2>/dev/null
+exec 3<>"$PORT"
+
+# Send an AT command and wait for OK/ERROR (max. $2 seconds per line)
+at() {
+    printf '%s\r' "$1" >&3
+    while read -t "${2:-3}" -r line <&3; do
+        line=$(echo "$line" | tr -d '\r')
+        case "$line" in
+            OK) return 0 ;;
+            ERROR*|+CMS\ ERROR*|+CME\ ERROR*) echo "$1: $line" >&2; return 1 ;;
+        esac
+    done
+    echo "$1: no answer" >&2
+    return 1
+}
+
+fail() {
+    logger -t icinga-sms "failed: $1"
+    echo "modem error: $1" >&2
+    exit 4
+}
+
+at 'ATE0' || fail "ATE0"
+at 'AT+CMGF=1' || fail "text mode"
+at 'AT+CSCS="GSM"' || fail "charset"
+
+printf 'AT+CMGS="%s"\r' "$number" >&3
+prompt=""
+while read -t 5 -n 1 c <&3; do
+    [ "$c" = ">" ] && prompt=1 && break
+done
+[ -n "$prompt" ] || fail "no prompt"
+
+printf '%s\032' "$msg" >&3
+result=""
+while read -t 60 -r line <&3; do
+    line=$(echo "$line" | tr -d '\r')
+    case "$line" in
+        +CMGS:*) result="$line" ;;
+        OK) [ -n "$result" ] && break ;;
+        ERROR*|+CMS\ ERROR*) fail "$line" ;;
+    esac
+done
+[ -n "$result" ] || fail "no confirmation"
+
+logger -t icinga-sms "sent to number ending ${number#"${number%????}"} ($result)"
+echo "sent ($result)"
