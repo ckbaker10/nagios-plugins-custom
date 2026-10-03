@@ -21,6 +21,7 @@ These plugins are tested only by me using them in my own environment
 - check_lm_sensors - Hardware sensor monitoring (temperature, fans, voltages) and HDD temperatures
 - check_space_usage - Disk space usage analysis by directory (respects mount points, excludes network mounts)
 - check_lpr - LPD/LPR printer daemon protocol testing (RFC 1179)
+- check_lte_router - OpenWrt LTE router: SIM, registration, signal (RSRP/RSRQ/SINR), LTE data and internet (status script `sms-gateway/icinga-lte-status`, installed with `sms-gateway/install-status.sh`)
 
 For detailed plugin documentation see [README-CHECKS.md](README-CHECKS.md)
 
