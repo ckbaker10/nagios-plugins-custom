@@ -20,7 +20,7 @@ DIST_DIR="${DIST_DIR:-$REPO_DIR/dist}"
 VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$REPO_DIR/pyproject.toml")"
 PREFIX="${PREFIX:-/opt/nagios-plugins-custom-$VERSION}"
 PYTHON_VERSION="${PYTHON_VERSION:-3.12}"
-GOSS_VERSION="${GOSS_VERSION:-v0.4.9}"
+GOSS_VERSION="${GOSS_VERSION:-v0.4.10}"
 NAME="nagios-plugins-custom-$VERSION-x86_64"
 
 if command -v podman >/dev/null; then
@@ -40,14 +40,14 @@ rm -rf "${DIST_DIR:?}/$NAME.tar.gz" "${DIST_DIR:?}/$NAME.tar.gz.sha256"
 
 # Explicit platform: local image tags may point to another architecture
 # after multi-arch builds
-"$RUNTIME" pull -q --platform linux/amd64 docker.io/library/rockylinux:8 >/dev/null
+"$RUNTIME" pull -q --platform linux/amd64 quay.io/rockylinux/rockylinux:8 >/dev/null
 "$RUNTIME" run --rm --platform linux/amd64 \
     -v "$REPO_DIR:/src:ro,Z" \
     -v "$DIST_DIR:/dist:Z" \
     -v "$UV_BIN:/usr/local/bin/uv:ro,Z" \
     -e PREFIX="$PREFIX" -e NAME="$NAME" -e VERSION="$VERSION" \
     -e PYTHON_VERSION="$PYTHON_VERSION" -e GOSS_VERSION="$GOSS_VERSION" \
-    docker.io/library/rockylinux:8 bash -c '
+    quay.io/rockylinux/rockylinux:8 bash -c '
         set -euo pipefail
         dnf -y -q install tar gzip findutils >/dev/null
         export UV_PYTHON_INSTALL_DIR=/tmp/python UV_CACHE_DIR=/tmp/uv-cache
@@ -66,10 +66,13 @@ rm -rf "${DIST_DIR:?}/$NAME.tar.gz" "${DIST_DIR:?}/$NAME.tar.gz.sha256"
         uv pip install -q --python "$stage/python/bin/python3" --target "$stage/lib" \
             --require-hashes --no-cache -r /src/requirements.txt
 
-        curl -fsSL -o "$stage/bin/goss" \
-            "https://github.com/goss-org/goss/releases/download/$GOSS_VERSION/goss-linux-amd64"
-        curl -fsSL "https://github.com/goss-org/goss/releases/download/$GOSS_VERSION/goss-linux-amd64.sha256" |
-            awk "{print \$1\"  $stage/bin/goss\"}" | sha256sum -c --quiet
+        # Since v0.4.10 goss ships tarballs plus one SHA256SUMS file
+        goss_url="https://github.com/goss-org/goss/releases/download/$GOSS_VERSION"
+        goss_tar="goss_${GOSS_VERSION#v}_linux_x86_64.tar.gz"
+        curl -fsSL -o "/tmp/$goss_tar" "$goss_url/$goss_tar"
+        curl -fsSL "$goss_url/goss_${GOSS_VERSION#v}_SHA256SUMS" |
+            grep " $goss_tar\$" | (cd /tmp && sha256sum -c --quiet)
+        tar -xzf "/tmp/$goss_tar" -C "$stage/bin" goss
         chmod 755 "$stage/bin/goss"
 
         cp /src/check_*.py /src/notify_*.py "$stage/"

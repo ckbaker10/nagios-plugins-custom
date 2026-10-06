@@ -108,8 +108,17 @@ cat /opt/nagios-plugins-lukas/BUILDINFO
 
 ```bash
 build/build.sh      # dist/nagios-plugins-custom-<version>-x86_64.tar.gz, ~30 s
+tests/e2e/run.sh    # acceptance test, see below
 build/release.sh    # GitHub release v<version>, needs gh auth login
 ```
+
+`tests/e2e/run.sh` builds the bundle and installs it in throwaway Podman
+containers of every supported distribution (Rocky 8/9/10, Debian 12/13,
+Ubuntu 22.04/24.04/26.04, openSUSE Leap 15.6/16.0). Each run checks the
+SHA-256 file, `BUILDINFO`, `--help` of every plugin, the bundled Python
+dependencies, and runs `check_goss` (passing and failing test) and
+`check_space_usage`. `E2E_TARBALL=dist/…tar.gz` tests an existing bundle;
+image names as arguments limit the run. Run it before every release.
 
 The version comes from `pyproject.toml`. Dependencies: edit
 `requirements.in`, then lock with the command at its top.
