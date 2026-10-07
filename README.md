@@ -8,7 +8,7 @@ My personal nagios plugins, suited for my environment
 
 These plugins are tested only by me using them in my own environment.
 They are shipped as one self-contained x86_64 bundle per release
-(current: [v1.4.0](https://github.com/ckbaker10/nagios-plugins-custom/releases/tag/v1.4.0))
+(current: [v1.4.1](https://github.com/ckbaker10/nagios-plugins-custom/releases/tag/v1.4.1))
 and installed with the Ansible role in `ansible/`.
 
 ## Available Plugins
@@ -126,7 +126,7 @@ The version comes from `pyproject.toml`. Dependencies: edit
 ### Without Ansible
 
 ```bash
-v=1.4.0
+v=1.4.1
 curl -fLO https://github.com/ckbaker10/nagios-plugins-custom/releases/download/v$v/nagios-plugins-custom-$v-x86_64.tar.gz
 curl -fLO https://github.com/ckbaker10/nagios-plugins-custom/releases/download/v$v/nagios-plugins-custom-$v-x86_64.tar.gz.sha256
 sha256sum -c nagios-plugins-custom-$v-x86_64.tar.gz.sha256
