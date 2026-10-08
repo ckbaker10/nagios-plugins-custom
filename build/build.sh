@@ -41,7 +41,7 @@ rm -rf "${DIST_DIR:?}/$NAME.tar.gz" "${DIST_DIR:?}/$NAME.tar.gz.sha256"
 # Explicit platform: local image tags may point to another architecture
 # after multi-arch builds
 "$RUNTIME" pull -q --platform linux/amd64 quay.io/rockylinux/rockylinux:8 >/dev/null
-"$RUNTIME" run --rm --platform linux/amd64 \
+"$RUNTIME" run --rm --name "npc-build-$$" --platform linux/amd64 \
     -v "$REPO_DIR:/src:ro,Z" \
     -v "$DIST_DIR:/dist:Z" \
     -v "$UV_BIN:/usr/local/bin/uv:ro,Z" \

@@ -1,0 +1,2 @@
+# Only this fixed argv may read Postfix delivery evidence. No general log access.
+{{ nagios_plugins_custom_user }} ALL=(root) NOPASSWD: /opt/nagios-plugins-lukas/check_mail_report --mode postfix --config /etc/nagios/mail-report/postfix.json --timeout 60 --max-age 300

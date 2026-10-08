@@ -79,6 +79,10 @@ PYTHONPATH="$P/lib" "$P/python/bin/python3" -s -c \
     'import requests, urllib3, yaml, psutil, Crypto, pkcs7, kasa, aiohttp, cryptography, ecdsa' \
     && pass "bundled Python imports all locked dependencies" || fail "dependency import"
 
+NPC_MAIL_REPORT_PLUGIN="$P/check_mail_report.py" PYTHONPATH="$P/lib" \
+    "$P/python/bin/python3" -s -m unittest discover -s /npc-tests -p 'test_check_mail_report*.py' \
+    && pass "mail report synthetic contracts with bundled Python" || fail "mail report contracts"
+
 printf 'file:\n  /etc/os-release:\n    exists: true\n  /nonexistent:\n    exists: false\n' >/tmp/goss.yaml
 out=$(/opt/nagios-plugins-lukas/check_goss -g /tmp/goss.yaml 2>&1); rc=$?
 [ "$rc" = 0 ] && case $out in "OK - "*) true ;; *) false ;; esac \
@@ -97,8 +101,9 @@ EOF
 total=0
 for image in "${IMAGES[@]}"; do
     echo "== $image"
-    if "$ENGINE" run --rm --platform linux/amd64 \
+    if "$ENGINE" run --rm --name "npc-e2e-$$" --platform linux/amd64 \
         -v "$(dirname "$TARBALL"):/dist:ro,Z" \
+        -v "$REPO/tests:/npc-tests:ro,Z" \
         -e VERSION="$VERSION" -e TARBALL="$TARBALL" \
         "$image" bash -c "$INSIDE"; then
         :

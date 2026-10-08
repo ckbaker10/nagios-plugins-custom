@@ -6,6 +6,9 @@ My personal nagios plugins, suited for my environment
 
 ## Overview
 
+Mail route and public JSON checks: [`check_mail_report`](README-MAIL-REPORT.md)
+supports direct probes, existing reports and the regular local Postfix/DKIM route.
+
 These plugins are tested only by me using them in my own environment.
 They are shipped as one self-contained x86_64 bundle per release
 (current: [v1.4.1](https://github.com/ckbaker10/nagios-plugins-custom/releases/tag/v1.4.1))

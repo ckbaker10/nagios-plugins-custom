@@ -273,6 +273,35 @@
       ansible.builtin.debug:
         msg: "sms-gateway/install-status.sh root@{{ nagios_plugins_custom_lte_router }} <pubkey>: {{ nagios_plugins_custom_lte_key.public_key }}"
 
+- name: Set up local Postfix mail report probe
+  when: nagios_plugins_custom_mail_report_postfix | length > 0
+  block:
+    - name: Create private mail report configuration directory
+      ansible.builtin.file:
+        path: /etc/nagios/mail-report
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: Install private Postfix probe configuration
+      ansible.builtin.copy:
+        content: "{{ nagios_plugins_custom_mail_report_postfix | to_nice_json }}\n"
+        dest: /etc/nagios/mail-report/postfix.json
+        owner: root
+        group: root
+        mode: '0600'
+      no_log: true
+
+    - name: Authorize only the fixed Postfix probe command
+      ansible.builtin.template:
+        src: mail-report-sudoers.j2
+        dest: /etc/sudoers.d/nagios-mail-report
+        owner: root
+        group: root
+        mode: '0440'
+        validate: visudo -cf %s
+
 - name: Verify installation
   ansible.builtin.command:
     cmd: "{{ nagios_plugins_custom_link }}/check_lm_sensors --version"

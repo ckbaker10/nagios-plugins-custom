@@ -1,6 +1,10 @@
 ---
 # Version of the prebuilt bundle (build/build.sh, version from pyproject.toml)
-nagios_plugins_custom_version: "1.4.1"
+nagios_plugins_custom_version: "1.5.0"
+
+# Optional local Postfix mail probe. Empty leaves mail monitoring unconfigured.
+# Requires /var/log/mail.log; configuration is root-owned, mode 0600.
+nagios_plugins_custom_mail_report_postfix: {}
 nagios_plugins_custom_install_prefix: "/opt/nagios-plugins-custom-{{ nagios_plugins_custom_version }}"
 
 # Stable path used by the Icinga2 CheckCommands (commands-custom.conf); was a
