@@ -36,6 +36,7 @@ Set `nagios_plugins_custom_mail_report_postfix` in host variables, for example:
 ```yaml
 nagios_plugins_custom_mail_report_postfix:
   origin: https://validator.example.test
+  assess_all: true
   smtp_host: 127.0.0.1
   smtp_port: 25
   smtp_tls: loopback_plain
@@ -68,6 +69,15 @@ unknown schema and stale/expired reports are UNKNOWN. A deferred/bounced deliver
 missing delivery report link or transport/deadline failure is CRITICAL. A local
 configuration or log access error is UNKNOWN. Score ranges are optional via
 `--warning 90:` and `--critical 70:` and require a complete schema-v1 rating.
+
+With `assess_all: true`, every public finding is evaluated, including transport,
+DNS, spam, identity, oversigning and message checks. A `problem` finding is
+CRITICAL, an `unbekannt` finding UNKNOWN, and a `hinweis` finding WARNING;
+`ok` and `nicht_anwendbar` do not alert. Known failures take precedence over
+optional unknown findings. A complete supported rating is required and its
+grade and score are shown without imposing an additional score threshold.
+Perfdata includes all finding counts plus separate configured expectation
+counts. Without this opt-in, the original direct-probe behavior is preserved.
 
 Only new log bytes after opening the probe are scanned; queue IDs are matched
 exactly, incoming `smtpd` and unrelated deliveries are ignored. Rename rotation

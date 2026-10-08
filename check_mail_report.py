@@ -170,11 +170,13 @@ def origin(value, local):
 
 def configuration(cfg, mode):
     allowed = {"origin", "allow_loopback_http", "ca_file", "report_url", "smtp_host", "smtp_port",
-               "smtp_tls", "smtp_user", "smtp_password", "sender", "recipient", "helo", "expect"}
+               "smtp_tls", "smtp_user", "smtp_password", "sender", "recipient", "helo", "expect", "assess_all"}
     if set(cfg) - allowed:
         unknown("unknown configuration field")
     if "allow_loopback_http" in cfg and type(cfg["allow_loopback_http"]) is not bool:
         unknown("invalid loopback HTTP profile")
+    if "assess_all" in cfg and type(cfg["assess_all"]) is not bool:
+        unknown("invalid full report assessment profile")
     cfg["origin"] = origin(cfg.get("origin"), cfg.get("allow_loopback_http", False))
     if "ca_file" in cfg and (not isinstance(cfg["ca_file"], str) or not os.path.isabs(cfg["ca_file"])):
         unknown("invalid CA file configuration")
@@ -487,7 +489,7 @@ def evaluate(report, cfg, now, started, maximum_age, warning=None, critical=None
             unknown("required check expectation is inconclusive")
         states.append(0 if satisfied else 2 if expectation.get("severity", "critical") == "critical" else 1)
     metrics = {"report_age": max(age, 0), "checks_ok": states.count(0), "checks_failed": len(states) - states.count(0)}
-    if warning or critical:
+    if warning or critical or cfg.get("assess_all", False):
         rating = report.get("rating")
         if (not isinstance(rating, dict) or type(rating.get("version")) is not int or rating["version"] != 1
                 or rating.get("state") != "complete" or rating.get("scope") != "message_and_last_hop"
@@ -499,20 +501,46 @@ def evaluate(report, cfg, now, started, maximum_age, warning=None, critical=None
         if "SABCDEF".index(rating["grade"]) < "SABCDEF".index(upper_grade):
             unknown("inconsistent rating grade")
         metrics["score"] = score
+        if cfg.get("assess_all", False):
+            metrics["grade"] = rating["grade"]
         states.append(2 if critical and critical.alerts(score) else 1 if warning and warning.alerts(score) else 0)
-    status = max(states, default=0)
+    if cfg.get("assess_all", False):
+        if not all(any(c["name"] == name for c in checks) for name in
+                   ("TLS", "Metadaten", "HELO", "Reverse DNS", "Absenderbezug")):
+            unknown("incomplete full report evidence")
+        metrics["expectations_ok"] = metrics.pop("checks_ok")
+        metrics["expectations_failed"] = metrics.pop("checks_failed")
+        metrics["checks_total"] = len(checks)
+        for label, level in (("ok", "ok"), ("failed", "problem"), ("warning", "hinweis"),
+                             ("unknown", "unbekannt"), ("na", "nicht_anwendbar")):
+            metrics["checks_" + label] = sum(c["level"] == level for c in checks)
+        states.append(2 if metrics["checks_failed"] else 3 if metrics["checks_unknown"] else
+                      1 if metrics["checks_warning"] else 0)
+        # Known failures remain actionable even if another optional check is unknown.
+        status = next((code for code in (2, 3, 1) if code in states), 0)
+    else:
+        status = max(states, default=0)
     return status, metrics
 
 
 def output(status, metrics, warning=None, critical=None):
     data = []
     for name, value in metrics.items():
+        if name == "grade":
+            continue
         unit = "s" if name in ("http_time", "report_age") else ""
         warn, crit = (warning.text if warning else "", critical.text if critical else "") if name == "score" else ("", "")
         upper = "100" if name == "score" else ""
         data.append(f"{name}={value:.3f}{unit};{warn};{crit};0;{upper}")
     messages = ("fresh report meets expectations", "mail expectation warning", "mail expectation failed", "report cannot be assessed")
-    return f"{STATUSES[status]} - {messages[status]} | {' '.join(data)}"
+    message = messages[status]
+    if "checks_total" in metrics:
+        message = ("full report meets expectations", "report has advisory findings", "report has failed findings or expectations",
+                   "report has inconclusive findings")[status]
+        message += (f"; checks={metrics['checks_total']} problems={metrics['checks_failed']}"
+                    f" warnings={metrics['checks_warning']} unknown={metrics['checks_unknown']}"
+                    f"; rating={metrics['grade']} score={metrics['score']}/100")
+    return f"{STATUSES[status]} - {message} | {' '.join(data)}"
 
 
 class Parser(argparse.ArgumentParser):
