@@ -275,7 +275,16 @@
 
 - name: Set up local Postfix mail report probe
   when: nagios_plugins_custom_mail_report_postfix | length > 0
+  tags: [mail_report]
   block:
+    - name: Install current mail report plugin from this checkout
+      ansible.builtin.copy:
+        src: "{{ role_path }}/../../../check_mail_report.py"
+        dest: "{{ nagios_plugins_custom_install_prefix }}/check_mail_report.py"
+        owner: root
+        group: root
+        mode: '0644'
+
     - name: Create private mail report configuration directory
       ansible.builtin.file:
         path: /etc/nagios/mail-report

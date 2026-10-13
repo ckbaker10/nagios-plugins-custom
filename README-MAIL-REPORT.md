@@ -31,6 +31,11 @@ The optional Ansible configuration installs a root-owned 0700 directory, 0600
 configuration and a sudo rule for one fixed command with fixed arguments. The
 plugin, bundle and stable symlink must remain root-owned and unwritable by Nagios.
 Nagios receives no general access to mail logs or sudo arguments.
+When the Postfix configuration is enabled, the Ansible role installs this
+checkout's `check_mail_report.py` over the bundled copy. This keeps mail-check
+features current independently of the bundle's Python and other plugins.
+For hosts with an existing bundle, `--tags mail_report` updates only this plugin,
+its private configuration and the fixed sudo rule.
 
 Set `nagios_plugins_custom_mail_report_postfix` in host variables, for example:
 
