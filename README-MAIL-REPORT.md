@@ -3,8 +3,9 @@
 `check_mail_report` requires Linux and Python >= 3.11 (the release bundles Python
 3.12). The JSON evaluator and direct probe come from `incoming-email-validator-go`
 `deploy/check-mail-report.py`, commit `4802a8f`. Only the public report API is read;
-no validator database or diagnostics are required. No peer text, message contents,
-mailbox, URL, report token or credential is emitted in Nagios output.
+no validator database or diagnostics are required. The current validated report
+URL and unlock code are shown in Nagios output. Peer text, message contents,
+mailboxes and SMTP credentials are excluded.
 
 ## Modes
 
@@ -78,6 +79,46 @@ optional unknown findings. A complete supported rating is required and its
 grade and score are shown without imposing an additional score threshold.
 Perfdata includes all finding counts plus separate configured expectation
 counts. Without this opt-in, the original direct-probe behavior is preserved.
+
+### Ignore individual checks
+
+Add `ignore_checks` to the private JSON configuration (or the corresponding
+Ansible host variable). Check names and codes match the machine-readable report
+exactly. No finding is ignored by default. For example:
+
+```json
+"ignore_checks": [
+  {"name": "DNSSEC", "codes": ["dnssec_insecure"], "ignore": true},
+  {"name": "DKIM", "ignore": false}
+]
+```
+
+Set `ignore` to `false` or remove a rule to assess that finding again. Omitting
+`codes` matches every finding with that name; omitting `ignore` means `true`.
+If multiple rules match, the last matching rule wins. A code-specific exception
+can therefore reenable one finding within an ignored check group.
+
+Ignored findings do not raise WARNING, CRITICAL or UNKNOWN and are excluded from
+configured expectations. Other findings and expectations remain active. Missing
+evidence for an expectation ignored by name is also ignored. Schema, freshness,
+required core evidence and consistency validation still apply to the entire
+report. Score thresholds still use the original rating, which is not recalculated.
+With `assess_all`, `checks_total` counts every finding and `checks_ignored` counts
+the excluded findings; the severity counters count only active findings.
+
+### Current report access in Nagios
+
+Every status line includes `report=<URL>; unlock_code=<code>` before the `|`
+performance data separator. In sending modes these values belong to the current
+SMTP DATA or correlated Postfix delivery, never a previous check. Access remains
+visible if subsequent HTTP fetching or assessment fails, including GET timeout.
+
+If no current report link was obtained, `report=unavailable` is shown. A missing
+code is shown as `unlock_code=unavailable`. In `report` mode an optional
+`report_code` in the protected configuration can supply an existing report's code.
+URLs and codes are never performance data or command-line arguments. The code
+allows access to original diagnostic values and report deletion, so monitoring
+viewers receiving these values have that access too.
 
 Only new log bytes after opening the probe are scanned; queue IDs are matched
 exactly, incoming `smtpd` and unrelated deliveries are ignored. Rename rotation

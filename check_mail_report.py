@@ -30,6 +30,8 @@ import urllib.request
 MAX_BODY = 1 << 20
 MAX_CONFIG = 16 << 10
 TOKEN = r"[A-Za-z0-9_-]{32}"
+UNLOCK_CODE = r"[A-Za-z0-9_-]{22}"
+MAX_RESULT = 4096
 STATUSES = ("OK", "WARNING", "CRITICAL", "UNKNOWN")
 REPORT_STATES = {"ohne_festgestellte_probleme", "auffaellig", "unvollstaendig"}
 LEVELS = {"ok", "hinweis", "problem", "unbekannt", "nicht_anwendbar"}
@@ -160,6 +162,7 @@ def origin(value, local):
     except ValueError:
         unknown("invalid configured origin")
     if (not parts.hostname or parts.username is not None or parts.password is not None
+            or re.fullmatch(r"[A-Za-z0-9_.\[\]:-]+", parts.netloc) is None
             or parts.path not in ("", "/") or parts.query or parts.fragment
             or parts.scheme not in ("http", "https") or "\\" in value):
         unknown("invalid configured origin")
@@ -170,7 +173,8 @@ def origin(value, local):
 
 def configuration(cfg, mode):
     allowed = {"origin", "allow_loopback_http", "ca_file", "report_url", "smtp_host", "smtp_port",
-               "smtp_tls", "smtp_user", "smtp_password", "sender", "recipient", "helo", "expect", "assess_all"}
+               "smtp_tls", "smtp_user", "smtp_password", "sender", "recipient", "helo", "expect", "assess_all",
+               "ignore_checks", "report_code"}
     if set(cfg) - allowed:
         unknown("unknown configuration field")
     if "allow_loopback_http" in cfg and type(cfg["allow_loopback_http"]) is not bool:
@@ -178,6 +182,20 @@ def configuration(cfg, mode):
     if "assess_all" in cfg and type(cfg["assess_all"]) is not bool:
         unknown("invalid full report assessment profile")
     cfg["origin"] = origin(cfg.get("origin"), cfg.get("allow_loopback_http", False))
+    if "report_code" in cfg and (mode != "report" or not isinstance(cfg["report_code"], str)
+                                  or re.fullmatch(UNLOCK_CODE, cfg["report_code"]) is None):
+        unknown("invalid configured report code")
+    rules = cfg.get("ignore_checks", [])
+    if not isinstance(rules, list) or len(rules) > 512:
+        unknown("invalid ignored checks")
+    for rule in rules:
+        if (not isinstance(rule, dict) or set(rule) - {"name", "codes", "ignore"}
+                or not isinstance(rule.get("name"), str) or not 1 <= len(rule["name"]) <= 80
+                or type(rule.get("ignore", True)) is not bool
+                or ("codes" in rule and (not isinstance(rule["codes"], list) or not 1 <= len(rule["codes"]) <= 32
+                    or any(not isinstance(code, str) or re.fullmatch(r"[a-z0-9_]{1,80}", code) is None
+                           for code in rule["codes"])))):
+            unknown("invalid ignored check rule")
     if "ca_file" in cfg and (not isinstance(cfg["ca_file"], str) or not os.path.isabs(cfg["ca_file"])):
         unknown("invalid CA file configuration")
     expected = cfg.get("expect", [])
@@ -277,7 +295,23 @@ class BoundedSMTPSSL(smtplib.SMTP_SSL, BoundedSMTP):
     pass
 
 
-def smtp_probe(cfg, context, timeout, queued=False):
+def delivery_reference(response, base, access=None):
+    urls = re.findall(rb"https?://[^\s()]+", response)
+    if len(urls) != 1:
+        raise Failure(2, "delivery report link missing or ambiguous")
+    try:
+        token = report_token(urls[0].decode("ascii"), base)
+    except UnicodeError:
+        unknown("invalid delivery report reference")
+    codes = re.findall(rb"Unlock code: ([^\s()]+)", response)
+    if len(codes) > 1 or (codes and re.fullmatch(UNLOCK_CODE.encode(), codes[0]) is None):
+        unknown("invalid delivery unlock code")
+    if access is not None:
+        access(base + "/r/" + token, codes[0].decode("ascii") if codes else None)
+    return token
+
+
+def smtp_probe(cfg, context, timeout, queued=False, access=None):
     nonce = secrets.token_hex(16)
     message = email.message.EmailMessage(policy=email.policy.SMTP)
     message["From"], message["To"] = cfg["sender"], cfg["recipient"]
@@ -308,13 +342,7 @@ def smtp_probe(cfg, context, timeout, queued=False):
             if len(queue_ids) != 1:
                 raise Failure(2, "Postfix queue reference missing or ambiguous")
             return queue_ids[0].decode("ascii")
-        urls = re.findall(rb"https?://[^\s]+", response)
-        if len(urls) != 1:
-            raise Failure(2, "SMTP DATA report link missing or ambiguous")
-        try:
-            return report_token(urls[0].decode("ascii"), cfg["origin"])
-        except UnicodeError:
-            unknown("invalid SMTP report reference")
+        return delivery_reference(response, cfg["origin"], access)
     except OSError:
         raise Failure(2, "SMTP transport unavailable") from None
     finally:
@@ -367,7 +395,7 @@ class PostfixLog:
             unknown("Postfix log line limit exceeded")
         return parts
 
-    def report(self, queue_id, base):
+    def report(self, queue_id, base, access=None):
         marker = re.compile(rb"\bpostfix/smtp\[\d+\]: " + queue_id.encode("ascii") + rb": ")
         while True:
             for line in self.lines():
@@ -377,20 +405,15 @@ class PostfixLog:
                     raise Failure(2, "Postfix delivery failed or deferred")
                 if not re.search(rb"\bstatus=sent \(250\b", line):
                     continue
-                urls = re.findall(rb"https?://[^\s()]+", line)
-                if len(urls) != 1:
-                    raise Failure(2, "Postfix delivery report link missing or ambiguous")
-                try:
-                    return report_token(urls[0].decode("ascii"), base)
-                except UnicodeError:
-                    unknown("invalid Postfix report reference")
+                response = line.split(b"status=sent (250", 1)[1]
+                return delivery_reference(response, base, access)
             time.sleep(0.1)
 
 
-def postfix_probe(cfg, context, timeout):
+def postfix_probe(cfg, context, timeout, access=None):
     with contextlib.closing(PostfixLog()) as log:
         queue_id = smtp_probe(cfg, context, timeout, queued=True)
-        return log.report(queue_id, cfg["origin"])
+        return log.report(queue_id, cfg["origin"], access)
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -432,6 +455,14 @@ def timestamp(value):
         return result
     except (ValueError, OverflowError):
         unknown("invalid report timestamp")
+
+
+def ignored(check, cfg):
+    decision = False
+    for rule in cfg.get("ignore_checks", []):
+        if rule["name"] == check["name"] and ("codes" not in rule or check.get("code") in rule["codes"]):
+            decision = rule.get("ignore", True)
+    return decision
 
 
 def evaluate(report, cfg, now, started, maximum_age, warning=None, critical=None):
@@ -481,7 +512,12 @@ def evaluate(report, cfg, now, started, maximum_age, warning=None, critical=None
     for expectation in cfg.get("expect", []):
         selected = [c for c in checks if c["name"] == expectation["name"]]
         if not selected:
+            if ignored({"name": expectation["name"]}, cfg):
+                continue
             unknown("required check evidence absent")
+        selected = [c for c in selected if not ignored(c, cfg)]
+        if not selected:
+            continue
         matches = [c["code"] in expectation["codes"] and
                    all(c[key] == expectation[key] for key in ("result", "level") if key in expectation) for c in selected]
         satisfied = any(matches) if expectation.get("match", "all") == "any" else all(matches)
@@ -511,9 +547,11 @@ def evaluate(report, cfg, now, started, maximum_age, warning=None, critical=None
         metrics["expectations_ok"] = metrics.pop("checks_ok")
         metrics["expectations_failed"] = metrics.pop("checks_failed")
         metrics["checks_total"] = len(checks)
+        active = [c for c in checks if not ignored(c, cfg)]
+        metrics["checks_ignored"] = len(checks) - len(active)
         for label, level in (("ok", "ok"), ("failed", "problem"), ("warning", "hinweis"),
                              ("unknown", "unbekannt"), ("na", "nicht_anwendbar")):
-            metrics["checks_" + label] = sum(c["level"] == level for c in checks)
+            metrics["checks_" + label] = sum(c["level"] == level for c in active)
         states.append(2 if metrics["checks_failed"] else 3 if metrics["checks_unknown"] else
                       1 if metrics["checks_warning"] else 0)
         # Known failures remain actionable even if another optional check is unknown.
@@ -539,6 +577,7 @@ def output(status, metrics, warning=None, critical=None):
                    "report has inconclusive findings")[status]
         message += (f"; checks={metrics['checks_total']} problems={metrics['checks_failed']}"
                     f" warnings={metrics['checks_warning']} unknown={metrics['checks_unknown']}"
+                    f" ignored={metrics['checks_ignored']}"
                     f"; rating={metrics['grade']} score={metrics['score']}/100")
     return f"{STATUSES[status]} - {message} | {' '.join(data)}"
 
@@ -548,32 +587,47 @@ class Parser(argparse.ArgumentParser):
         unknown("invalid command line; use --help")
 
 
+def access_output(line, reference=None):
+    url, code = reference or (None, None)
+    message, separator, perfdata = line.partition(" | ")
+    return (message + f"; report={url or 'unavailable'}; unlock_code={code or 'unavailable'}"
+            + (separator + perfdata if separator else ""))
+
+
 def check(args, warning, critical, get_started):
+    reference = None
+
+    def access(url, code):
+        nonlocal reference
+        reference = (url, code)
+
     try:
         with deadline(args.timeout):
             cfg = configuration(protected_config(args.config), args.mode)
             context = ssl.create_default_context(cafile=cfg.get("ca_file"))
             started = dt.datetime.now(dt.timezone.utc) if args.mode != "report" else None
             if args.mode == "postfix":
-                token = postfix_probe(cfg, context, args.timeout)
+                token = postfix_probe(cfg, context, args.timeout, access)
             elif started:
-                token = smtp_probe(cfg, context, args.timeout)
+                token = smtp_probe(cfg, context, args.timeout, access=access)
             else:
                 token = report_token(cfg["report_url"], cfg["origin"])
+                access(cfg["origin"] + "/r/" + token, cfg.get("report_code"))
             signal.setitimer(signal.ITIMER_REAL, min(10, signal.getitimer(signal.ITIMER_REAL)[0]))
-            get_started()
+            get_started(reference)
             report, elapsed = fetch_report(cfg, token, context, args.timeout)
             status, metrics = evaluate(report, cfg, dt.datetime.now(dt.timezone.utc), started, args.max_age, warning, critical)
             metrics["http_time"] = elapsed
-            return status, output(status, metrics, warning, critical)
+            return status, access_output(output(status, metrics, warning, critical), reference)
     except Failure as exc:
-        return exc.status, f"{STATUSES[exc.status]} - {exc}"
+        status, line = exc.status, f"{STATUSES[exc.status]} - {exc}"
     except (ssl.SSLError, smtplib.SMTPException, urllib.error.URLError, TimeoutError, ConnectionError):
-        return 2, "CRITICAL - SMTP or HTTP transport unavailable"
+        status, line = 2, "CRITICAL - SMTP or HTTP transport unavailable"
     except OSError:
-        return 3, "UNKNOWN - local configuration or runtime unavailable"
+        status, line = 3, "UNKNOWN - local configuration or runtime unavailable"
     except Exception:
-        return 3, "UNKNOWN - report check failed"
+        status, line = 3, "UNKNOWN - report check failed"
+    return status, access_output(line, reference)
 
 
 def supervised_check(args, warning, critical):
@@ -581,25 +635,31 @@ def supervised_check(args, warning, critical):
     # the tracked child reads configuration or performs network operations.
     reader, writer = os.pipe()
     child = None
+    reference = None
     try:
         with deadline(args.timeout):
             child = os.fork()
             if child == 0:
                 os.close(reader)
                 try:
-                    status, line = check(args, warning, critical, lambda: os.write(writer, b"G"))
+                    status, line = check(args, warning, critical,
+                                         lambda ref: os.write(writer, b"G" + json.dumps(ref).encode("ascii") + b"\n"))
                     os.write(writer, f"{status}\n{line}".encode("ascii"))
                 finally:
                     os._exit(0)
             os.close(writer)
             writer = None
             result = bytearray()
-            while raw := os.read(reader, 1025 - len(result)):
-                if not result and raw.startswith(b"G"):
-                    signal.setitimer(signal.ITIMER_REAL, min(10, signal.getitimer(signal.ITIMER_REAL)[0]))
-                    raw = raw[1:]
+            header_read = False
+            while raw := os.read(reader, MAX_RESULT + 1 - len(result)):
                 result.extend(raw)
-                if len(result) > 1024:
+                if not header_read and result.startswith(b"G") and b"\n" in result:
+                    header, _, remaining = result.partition(b"\n")
+                    reference = json.loads(header[1:])
+                    result = bytearray(remaining)
+                    header_read = True
+                    signal.setitimer(signal.ITIMER_REAL, min(10, signal.getitimer(signal.ITIMER_REAL)[0]))
+                if len(result) > MAX_RESULT:
                     unknown("invalid check subprocess result")
             _, wait_status = os.waitpid(child, 0)
             child = None
@@ -609,6 +669,8 @@ def supervised_check(args, warning, critical):
             if code not in ("0", "1", "2", "3") or "\n" in line or not line.startswith(STATUSES[int(code)] + " - "):
                 unknown("invalid check subprocess result")
             return int(code), line
+    except Failure as exc:
+        return exc.status, access_output(f"{STATUSES[exc.status]} - {exc}", reference)
     finally:
         os.close(reader)
         if writer is not None:
@@ -637,19 +699,19 @@ def main(argv=None):
         print(line)
         return status
     except Failure as exc:
-        print(f"{STATUSES[exc.status]} - {exc}")
+        print(access_output(f"{STATUSES[exc.status]} - {exc}"))
         return exc.status
     except (ssl.SSLError, smtplib.SMTPException, urllib.error.URLError, TimeoutError, ConnectionError):
-        print("CRITICAL - SMTP or HTTP transport unavailable")
+        print(access_output("CRITICAL - SMTP or HTTP transport unavailable"))
         return 2
     except OSError:
-        print("UNKNOWN - local configuration or runtime unavailable")
+        print(access_output("UNKNOWN - local configuration or runtime unavailable"))
         return 3
     except SystemExit:
         return 0
     except Exception:
-        # No peer text, URL, credential, private value or traceback reaches Nagios.
-        print("UNKNOWN - report check failed")
+        # Only validated report access is intentionally exposed, never peer text.
+        print(access_output("UNKNOWN - report check failed"))
         return 3
 
 

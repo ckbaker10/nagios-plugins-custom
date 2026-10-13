@@ -132,7 +132,7 @@ class PostfixTest(unittest.TestCase):
                             while self.rfile.readline(8192) != b".\r\n":
                                 pass
                             with log_path.open("ab") as stream:
-                                stream.write(f"host postfix/smtp[123]: ABCDE12345: status=sent (250 {base}/r/{TOKEN})\n".encode())
+                                stream.write(f"host postfix/smtp[123]: ABCDE12345: status=sent (250 Unlock code: {'B' * 22} Results: {base}/r/{TOKEN})\n".encode())
                             self.wfile.write(b"250 queued as ABCDE12345\r\n")
                             return
                         self.wfile.write(b"250 fixture\r\n")
@@ -153,7 +153,7 @@ class PostfixTest(unittest.TestCase):
                 self.assertFalse(thread.is_alive())
                 self.assertEqual(status, 0, output.getvalue())
                 self.assertTrue(output.getvalue().startswith("OK - "))
-                self.assertNotIn(TOKEN, output.getvalue())
+                self.assertIn(f"; report={base}/r/{TOKEN}; unlock_code={'B' * 22} | ", output.getvalue())
                 self.assertEqual(requests, ["/api/v1/reports/" + TOKEN])
 
 
