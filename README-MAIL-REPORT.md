@@ -87,9 +87,14 @@ counts. Without this opt-in, the original direct-probe behavior is preserved.
 
 ### Ignore individual checks
 
+Local Message-ID history (`Message-ID-Historie`) is excluded by default because
+the service has retired this check. Existing reports do not cause a notice for
+it, and old expectations do not require an absent history finding. An explicit
+`ignore: false` rule can still opt into evaluating a historical finding.
+
 Add `ignore_checks` to the private JSON configuration (or the corresponding
 Ansible host variable). Check names and codes match the machine-readable report
-exactly. No finding is ignored by default. For example:
+exactly. Other findings are not ignored by default. For example:
 
 ```json
 "ignore_checks": [

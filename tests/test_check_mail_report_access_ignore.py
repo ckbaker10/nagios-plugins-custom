@@ -18,6 +18,20 @@ BASE = "https://validator.example.test"
 
 
 class IgnoreTest(unittest.TestCase):
+    def test_retired_message_id_history_is_ignored_present_or_absent(self):
+        expectation = dict(name="Message-ID-Historie", codes=["h10_first"])
+        data = self.data()
+        status, metrics = self.assess(data, [], expect=[expectation])
+        self.assertEqual(status, 0)
+        self.assertEqual(metrics["expectations_failed"], 0)
+        data["checks"].append(dict(name="Message-ID-Historie", code="h10_first",
+                                   result="unknown", level="hinweis"))
+        status, metrics = self.assess(data, [])
+        self.assertEqual(status, 0)
+        self.assertEqual(metrics["checks_ignored"], 1)
+        self.assertEqual(metrics["checks_warning"], 0)
+        self.assertEqual(self.assess(data, [dict(name="Message-ID-Historie", ignore=False)])[0], 1)
+
     def data(self):
         data = full_report()
         data["checks"][1].update(code="signature_valid", result="pass", level="ok")

@@ -458,7 +458,8 @@ def timestamp(value):
 
 
 def ignored(check, cfg):
-    decision = False
+    # Retired by the service; old reports and stale expectations may still contain it.
+    decision = check["name"] == "Message-ID-Historie"
     for rule in cfg.get("ignore_checks", []):
         if rule["name"] == check["name"] and ("codes" not in rule or check.get("code") in rule["codes"]):
             decision = rule.get("ignore", True)
