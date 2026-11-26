@@ -11,7 +11,7 @@ supports direct probes, existing reports and the regular local Postfix/DKIM rout
 
 These plugins are tested only by me using them in my own environment.
 They are shipped as one self-contained x86_64 bundle per release
-(current: [v1.4.1](https://github.com/ckbaker10/nagios-plugins-custom/releases/tag/v1.4.1))
+(current: [v1.5.1](https://github.com/ckbaker10/nagios-plugins-custom/releases/tag/v1.5.1))
 and installed with the Ansible role in `ansible/`.
 
 ## Available Plugins
@@ -129,7 +129,7 @@ The version comes from `pyproject.toml`. Dependencies: edit
 ### Without Ansible
 
 ```bash
-v=1.4.1
+v=1.5.1
 curl -fLO https://github.com/ckbaker10/nagios-plugins-custom/releases/download/v$v/nagios-plugins-custom-$v-x86_64.tar.gz
 curl -fLO https://github.com/ckbaker10/nagios-plugins-custom/releases/download/v$v/nagios-plugins-custom-$v-x86_64.tar.gz.sha256
 sha256sum -c nagios-plugins-custom-$v-x86_64.tar.gz.sha256
@@ -394,6 +394,23 @@ System programs installed by the role: smartmontools, lm-sensors, net-snmp
 tools (snmpget/snmpwalk for check_eap772 and check_jetdirect), setcap. The
 bundle contains Python 3.12 and goss (check_goss).
 
+The TPAP dependency uses python-ecdsa for elliptic-curve point arithmetic.
+python-ecdsa does not provide constant-time operations; its
+[timing-side-channel advisory](https://github.com/tlsfuzzer/python-ecdsa/security/advisories/GHSA-wj6h-64fc-37mp)
+has no fixed release. An audit finding therefore remains for the bundled
+ecdsa version. TPAP also performs arithmetic with credential-derived scalars;
+the absence of ECDSA signing in this plugin does not establish that these
+operations are unaffected. A constant-time transport replacement requires
+protocol compatibility tests. Keep monitoring and device access limited to
+the intended trusted network while this dependency remains in use.
+
+The current upstream Goss 0.4.10 binary was built with Go 1.25.12 and older
+Go dependencies. A binary-symbol scan also reports known advisories in that
+artifact. These findings need review for the configured Goss resources; they
+are not evidence that every check exposes every reported issue. A supported
+toolchain rebuild, dependency review and resource compatibility tests remain
+necessary before treating a new bundle as security-approved.
+
 ## Troubleshooting
 
 ### Bundle
@@ -432,7 +449,8 @@ default 15 s) it returns UNKNOWN instead of a traceback.
 3. Provide comprehensive error handling
 4. Add tests and documentation
 5. Add imported packages to requirements.in and re-lock requirements.txt
-6. Bump the version in pyproject.toml, `build/build.sh`, `build/release.sh`
+6. Bump the version in pyproject.toml (`build/build.sh` and `build/release.sh`
+   read it from there; the role default follows after the release)
 
 ## License
 

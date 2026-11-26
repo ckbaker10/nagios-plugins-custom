@@ -455,7 +455,7 @@ check_goss [-g <goss_file>] [options]
 
 **Performance Data**: Test counts, pass/fail statistics, failure percentage
 
-**Dependencies**: Requires goss binary in PATH
+**Dependencies**: goss binary in PATH; the bundle wrapper puts its own `bin/goss` first
 
 **Common Use Cases**:
 - Server configuration validation

@@ -91,7 +91,6 @@ if [ "$EUID" -eq 0 ]; then
     if [ -f /etc/os-release ]; then
         . /etc/os-release
         OS_ID="$ID"
-        OS_VERSION_ID="$VERSION_ID"
         echo "Detected OS: $NAME ${VERSION_ID:-unknown}"
     else
         OS_ID="unknown"
