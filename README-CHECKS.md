@@ -581,7 +581,7 @@ check_smart -g <glob_pattern> -i <interface> [options]
 
 **Required Arguments**:
 - `-d, --device`: Block device to monitor (e.g., /dev/sda) OR
-- `-g, --global`: Glob pattern for multiple devices (e.g., '/dev/sd[a-z]')
+- `-g, --global-pattern`: Glob pattern for multiple devices (e.g., '/dev/sd[a-z]')
 - `-i, --interface`: Device interface type (required)
 
 **Interface Types**:
@@ -982,7 +982,7 @@ check_eap772 -H <hostname> -u <username> -p <password> [options]
 **Required Arguments**:
 - `-H, --host`: Hostname or IP address of the EAP772 access point
 - `-u, --username`: SNMPv3 username (e.g., "monitoring")
-- `-p, --password`: SNMPv3 authentication password (MD5 protocol)
+- `-p, --auth-password`: SNMPv3 authentication password (MD5 protocol)
 
 **Optional Arguments**:
 - `--error-threshold`: Error count threshold for warning (default: 100)
