@@ -425,7 +425,11 @@ def fetch_report(cfg, token, context, timeout):
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect(),
                                         urllib.request.HTTPSHandler(context=context))
     request = urllib.request.Request(cfg["origin"] + "/api/v1/reports/" + token,
-                                     headers={"Accept": "application/json", "Accept-Encoding": "identity"})
+                                     headers={
+                                         "Accept": "application/json",
+                                         "Accept-Encoding": "identity",
+                                         "User-Agent": "RateMyMail-Icinga-Sensor/1.0",
+                                     })
     started = time.monotonic()
     try:
         with opener.open(request, timeout=timeout) as response:

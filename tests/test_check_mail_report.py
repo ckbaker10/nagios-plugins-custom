@@ -45,7 +45,7 @@ def report(now=NOW):
 
 
 @contextlib.contextmanager
-def http_peer(status=200, body=None, headers=None, trickle=False):
+def http_peer(status=200, body=None, headers=None, trickle=False, expected_user_agent=None):
     requests, stopped = [], threading.Event()
 
     class Handler(BaseHTTPRequestHandler):
@@ -54,6 +54,9 @@ def http_peer(status=200, body=None, headers=None, trickle=False):
 
         def do_GET(self):
             requests.append(self.path)
+            if expected_user_agent is not None and self.headers.get("User-Agent") != expected_user_agent:
+                self.send_error(403)
+                return
             data = body if body is not None else json.dumps(report(dt.datetime.now(dt.timezone.utc))).encode()
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
@@ -200,7 +203,7 @@ class TransportTest(unittest.TestCase):
         self.assertNotIn("secret", result.stdout)
 
     def test_real_get_and_no_smtp_in_report_mode(self):
-        with http_peer() as (base, requests):
+        with http_peer(expected_user_agent="RateMyMail-Icinga-Sensor/1.0") as (base, requests):
             result = cli(self.settings(base), "--mode", "report")
             self.assert_result(result, 0)
             self.assertEqual(requests, ["/api/v1/reports/" + TOKEN])
